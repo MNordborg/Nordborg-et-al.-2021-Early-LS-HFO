@@ -1,0 +1,839 @@
+---
+title: "2017.11 Larval metaival PAR"
+author: "Mikaela Nordborg"
+date: "03/07/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Background
+Analysis of data sets from planula larvae experiments performed in November and December 2017 to test the effects of heavy fuel oil WAF in the presence and absence of ultraviolet radiation (+UV vs -UV). All analysis performed in (at least) four steps:
+    - Model fitting, evaluation and interpretation of -UV/PAR only treatment data
+    - Model fitting, evaluation and interpretation of +UV treatment data
+    - Extraction of no effect concentration (NEC), 10 and 50% effect or lethal concentrations (EC/LCx) and associated 95% credible intervals.
+    - Comparison of posterior distributions of extracted NEC and 50% threshold concentrations for each light treatment (+/-UV).
+
+Compromised or invalid replicates identified prior to data import into R but removal is performed after import. Please see methods of main paper and *Table ___*, Supplementary materials for further details. Control treatment (filtered seawater) set as one third of the lowest treatment concentration used in each assays to avoid potential issues with transformations after data import. Treatment concentrations log10 transformed and analysed on log-scale due to the spacing of treatment concentrations and range covered (equal to or larger than 3 orders of magnitude).
+
+
+A majority of the data sets consist of binomial data and the following terms are used throughout:
+    year = year and month experiment was performed
+    endpoint = endpoint assessed
+    factor = light treatment used
+        PAR = -UV/in the absence of UV light
+        UV = +UV/in the presence of UV light
+    raw.x = time averaged, measured treatment concentration in μg TAH L-1
+    log.x = log10-transfomred, time-averaged, treatment concentrations (measured in μg TAH L-1)
+    suc = number of successes in sample (eg number of successfully settled larvae)
+    tot = total number of organisms in sample
+    prop = proportion of successes out of total tries/organisms in the sample
+    use_in_model = Yes/No, used to filter out samples/replicates that should not be used for model fitting
+    reason_for_exclusion = outlines the reason for why a sample/replicate was excluded from model fitting
+    comments = if further information regarding a sample/replicate may be relevant
+
+
+Larval metamorphosis data available for both November and December 2017 experiments. Each data set analysed separately.
+
+
+Analysis performed by Mikaela Nordborg.
+
+
+## Packages used and installation of latest version of jagsNEC
+
+Analysis performed using package jagsNEC and it's dependencies. The latest version of jagsNEC installed prior to start of analysis (16th June 2020).
+
+```{r}
+#devtools::install_github("AIMS/NEC-estimation")
+library(jagsNEC)
+library(R2jags)
+require(tidyverse)
+library(beepr)
+```
+
+
+
+## Larval metamorphosis 
+
+### November
+
+
+#### Import data, check data type and perform data preparation if required
+
+Import data
+```{r}
+data.L.meta.Nov.raw <- read_csv("Data/2017.11_HFO_larval_meta.csv")
+str(data.L.meta.Nov.raw)
+head(data.L.meta.Nov.raw)
+```
+
+Initial data wrangling
+```{r}
+data.L.meta.Nov.raw <- as.data.frame(data.L.meta.Nov.raw)
+data.L.meta.Nov.raw$raw.x <- as.numeric(as.character(data.L.meta.Nov.raw$raw.x))
+str(data.L.meta.Nov.raw)
+data.L.meta.Nov.raw$suc <- as.integer(data.L.meta.Nov.raw$suc)
+data.L.meta.Nov.raw$tot <- as.integer(data.L.meta.Nov.raw$tot)
+str(data.L.meta.Nov.raw)
+data.L.meta.Nov.raw$prop <- as.numeric(as.character(data.L.meta.Nov.raw$prop))
+str(data.L.meta.Nov.raw)
+head(data.L.meta.Nov.raw)
+tail(data.L.meta.Nov.raw)
+```
+
+
+Add a small value (1 order of magnitude less than the lowest treatment concentrations used) to raw.x for 0 ug/L replicates (filtered seawater control) to avoid issues with transformations
+```{r}
+data.L.meta.Nov.raw <- data.L.meta.Nov.raw %>%
+                            mutate(raw.x=ifelse(raw.x==0, 0.3, data.L.meta.Nov.raw$raw.x))
+head(data.L.meta.Nov.raw)
+tail(data.L.meta.Nov.raw)
+```
+
+
+Add a log.x variable
+```{r}
+data.L.meta.Nov.raw <- mutate(data.L.meta.Nov.raw, log.x = log10(data.L.meta.Nov.raw$raw.x))
+str(data.L.meta.Nov.raw)
+head(data.L.meta.Nov.raw)
+```
+
+
+Filter according to light treatment
+```{r}
+data.L.meta.PAR.raw <- filter(data.L.meta.Nov.raw, factor=="PAR")
+save(data.L.meta.PAR.raw, file = "2017.11_data.LmetaPAR.raw.RData")
+data.L.meta.UV.raw <- filter(data.L.meta.Nov.raw, factor=="UV")
+save(data.L.meta.UV.raw, file = "2017.11_data.LmetaPAR.raw.RData")
+```
+
+
+Filter according to whether replicates are to be included when fitting models or not
+```{r}
+data.L.meta.PAR <- filter(data.L.meta.PAR.raw, use_in_model=="Yes")
+data.L.meta.UV <- filter(data.L.meta.UV.raw, use_in_model=="Yes")
+```
+
+
+#### -UV/PAR
+
+
+##### Initial data exploration
+
+Check distribution of response variable and range of treatment concentrations used
+```{r}
+unique(data.L.meta.PAR$raw.x)
+par(mfrow=c(2,1))
+hist(data.L.meta.PAR$raw.x)
+hist(data.L.meta.PAR$suc/data.L.meta.PAR$tot)
+par(mfrow=c(1,1))
+plot(data.L.meta.PAR$log.x, data.L.meta.PAR$prop)
+```
+
+
+###### Fit models
+
+```{r}
+out.L.meta.PAR.all <- fit.jagsMANEC(data = data.L.meta.PAR, 
+                        x.var = "log.x", 
+                        y.var = "suc", 
+                        trials.var = "tot",
+                        model.set = "all",
+                        burnin = 10000)
+beep("mario")
+save(out.L.meta.PAR.all, file = "2017.11_LmetaPAR_modfit1.RData")
+load("2017.11_LmetaPAR_modfit1.RData")
+```
+
+```{r}
+check.chains(out.L.meta.PAR.all)
+```
+
+Minor evidence of poor chain mixing and autocorrelation observed for:
+    - ECxWeibull2 (SSsim)
+    - ECxWeibull1 (SSsim)
+    - NECHormesis (beta & NEC)
+
+Evidence of poor chain mixing or autocorrelation observed for:
+    - NEC4param (beta & NEC)
+    - NEC3param (beta & NEC)
+
+
+
+Re-fit using a longer burn-in and higher iterations
+```{r}
+out.L.meta.PAR.all <- fit.jagsMANEC(data = data.L.meta.PAR, 
+                        x.var = "log.x", 
+                        y.var = "suc", 
+                        trials.var = "tot",
+                        model.set = "all",
+                        burnin = 20000)
+beep("mario")
+save(out.L.meta.PAR.all, file = "2017.11_LmetaPAR_modfit2.RData")
+load("2017.11_LmetaPAR_modfit2.RData")
+```
+
+```{r}
+check.chains(out.L.meta.PAR.all)
+```
+
+Some indications of poor chain mixing and/or autocorrelation:
+    - ECxWeibull1 (SSsim)
+    - ECx4param (SSsim)
+    - NEC4param (beta & NEC)
+    - NEC3param (beta & NEC)
+    
+
+
+Check if model median, credible intervals and NEC estiamte are reasonable compared to the raw data
+```{r}
+plot(out.L.meta.PAR.all, all_models = TRUE, add.NEC = TRUE)
+```
+
+Based on plots the following models should be excluded:
+    - ECxLinear
+    - ECxExp
+    
+
+```{r}
+plot(out.L.meta.PAR.all, add.EC10 = TRUE, add.NEC = FALSE)
+```
+
+
+Drop inappropriate models and models with non-convergence
+```{r}
+out.L.meta.PAR.mod <- modify_jagsMANEC(out.L.meta.PAR.all, drop.models = c("ECxExp", "ECxLinear"))
+```
+
+```{r}
+plot(out.L.meta.PAR.mod, add.EC10 = TRUE, add.NEC = FALSE)
+```
+
+```{r}
+plot(out.L.meta.PAR.mod, all_models = TRUE, add.NEC = TRUE)
+```
+
+
+Check for evidence of overdispersion for remaining models
+```{r}
+out.L.meta.PAR.mod$mod.stats
+```
+
+Some indications of overdisperison but no overdispersion parameter for individual candidate models > 0.92. 
+
+
+Re-fit MANEC with over.disp = TRUE
+```{r}
+out.L.meta.PAR.all.od <- fit.jagsMANEC(data = data.L.meta.PAR, 
+                        x.var = "log.x", 
+                        y.var = "suc", 
+                        trials.var = "tot",
+                        model.set = "all",
+                        burnin = 20000,
+                        over.disp = TRUE)
+beep("mario")
+save(out.L.meta.PAR.all.od, file = "2017.11_LmetaPAR_modfit3.RData")
+load("2017.11_LmetaPAR_modfit3.RData")
+```
+
+```{r}
+check.chains(out.L.meta.PAR.all.od)
+```
+
+Indications of poor chain mixing or autocorrelation for:
+    - ECxWeibull2 (beta)
+    - ECxWeibull1 (beta)
+    - ECx4param (beta)
+    - ECxsigmoidal (d)
+    - NEC4param (beta)
+    
+    
+  
+Check if model median, credible intervals and NEC estimates are reasonable compared to the raw data
+```{r}
+plot(out.L.meta.PAR.all.od, all_models = TRUE, add.NEC = TRUE)
+```
+
+Based on plots the following models should be excluded:
+    - ECxLinear
+    - ECxExp
+    - ECxSigmoidal
+    - NECsigmoidal
+    - NECHormesis
+    
+    
+Drop poor model fits and models with convergence or autocorrelation issues
+```{r}
+out.L.meta.PAR.mod.od <- modify_jagsMANEC(out.L.meta.PAR.all.od, drop.models = c("ECxExp", "ECxLinear", "ECxsigmoidal", "NECHormesis", "NECsigmoidal"))
+```
+
+```{r}
+plot(out.L.meta.PAR.mod.od, all_models = TRUE, add.NEC = TRUE)
+```
+
+
+```{r}
+plot(out.L.meta.PAR.mod.od, add.EC10 = TRUE, add.NEC = FALSE)
+```
+
+
+
+Compare to MANEC fitted using the binomial distribution
+```{r}
+plot(out.L.meta.PAR.mod, add.EC10 = TRUE, add.NEC = FALSE)
+```
+
+
+Using the beta distribution improved the coverage of the credible intervals but worsened the fit of the model to the observed data at high treatment concentrations. However, no individual overdispersion parameters >0.92 were observed for candidate models fitted using the binomial distribution and therefore the MANEC fitted using the binomial was used for extraction of threshold values and interpretation of results. 
+
+
+
+Rename model output for selected model
+```{r}
+out.L.meta.PAR <- out.L.meta.PAR.mod
+```
+
+
+Extract the NEC-model subset for use in extraction of NEC and comparisons of posterior distributions
+```{r}
+out.L.meta.PAR.NEC <- modify_jagsMANEC(out.L.meta.PAR.mod, drop.models = c("ECx4param", "ECxWeibull1", "ECxWeibull2"))
+```
+
+```{r}
+plot(out.L.meta.PAR.NEC)
+```
+
+
+
+Save the output for the selected model
+```{r}
+save(out.L.meta.PAR, file = "2017.11_LmetaPAR_modfit.RData")
+load("2017.11_LmetaPAR_modfit.RData")
+save(out.L.meta.PAR.NEC, file = "2017.11_LmetaPAR_modfit_NEC.RData")
+load("2017.11_LmetaPAR_modfit_NEC.RData")
+```
+
+
+
+
+##### Extract results
+
+
+Extract NEC, EC10 and EC50 (with 95% credible intervals) from posterior and backtransform if required
+
+
+```{r}
+NEC.L.meta.PAR <- out.L.meta.PAR.NEC$NEC
+NEC.L.meta.PAR <- 10^NEC.L.meta.PAR
+NEC.L.meta.PAR
+```
+
+```{r}
+EC10.L.meta.PAR <- extract_ECx(out.L.meta.PAR, ECx.val = 10, type = "absolute")
+EC10.L.meta.PAR <- 10^EC10.L.meta.PAR
+EC10.L.meta.PAR
+```
+
+```{r}
+EC50.L.meta.PAR <- extract_ECx(out.L.meta.PAR, ECx.val = 50, type = "absolute")
+EC50.L.meta.PAR <- 10^EC50.L.meta.PAR
+EC50.L.meta.PAR
+```
+
+
+
+Extract complete posteriors for use in plotting and comparisons between light treatments
+```{r}
+pred.L.meta.PAR <- out.L.meta.PAR$pred.vals
+str(pred.L.meta.PAR)
+save(pred.L.meta.PAR, file = "2017.11_LmetaPAR_predvals.RData")
+```
+
+```{r}
+pred.L.meta.PAR.NEC <- out.L.meta.PAR.NEC$pred.vals
+str(pred.L.meta.PAR.NEC)
+save(pred.L.meta.PAR.NEC, file = "2017.11_LmetaPARNEC_predvals.RData")
+```
+
+
+
+#### +UV/UV
+
+
+##### Initial data exploration
+
+Check distribution of response variable and range of treatment concentrations used
+```{r}
+unique(data.L.meta.UV$raw.x)
+par(mfrow=c(2,1))
+hist(data.L.meta.UV$raw.x)
+hist(data.L.meta.UV$suc/data.L.meta.UV$tot)
+par(mfrow=c(1,1))
+plot(data.L.meta.UV$log.x, data.L.meta.UV$prop)
+```
+
+
+
+##### Fit models
+
+Fit a model-averaged NEC model
+
+
+```{r}
+out.L.meta.UV.all <- fit.jagsMANEC(data = data.L.meta.UV, 
+                        x.var = "log.x", 
+                        y.var = "suc", 
+                        trials.var = "tot",
+                        model.set = "all",
+                        burnin = 10000)
+beep("mario")
+save(out.L.meta.UV.all, file = "2017.11_LmetaUV_modfit1.RData")
+load("2017.11_LmetaUV_modfit1.RData")
+```
+
+
+Check chain mixing and aurocorrelation for each model fit
+```{r}
+check.chains(out.L.meta.UV.all)
+```
+
+
+Evidence of poor chain mixing or autocorrelation observed for:
+    - NEChormesis (beta & SSsim)
+    - NEC4param (beta, NEC & SSsim)
+    - NEC3param (beta, NEC & SSsim)
+
+
+Re-fit with higher burn-in and iterations
+```{r}
+out.L.meta.UV.all <- fit.jagsMANEC(data = data.L.meta.UV, 
+                        x.var = "log.x", 
+                        y.var = "suc", 
+                        trials.var = "tot",
+                        model.set = "all",
+                        burnin = 20000)
+beep("mario")
+save(out.L.meta.UV.all, file = "2017.11_LmetaUV_modfits2.RData")
+load("2017.11_LmetaUV_modfits2.RData")
+```
+
+```{r}
+check.chains(out.L.meta.UV.all)
+```
+
+Poor chain mixing or autocorrelation observed for:
+    - NEC4param (beta & NEC)
+    - NEC3param (beta, NEC & SSsim)
+    - NECHormesis (beta, NEC & SSsim)
+    
+
+
+```{r}
+plot(out.L.meta.UV.all, add.EC10 = TRUE, add.NEC = FALSE)
+```
+
+
+
+Check if model median, credible intervals and NEC estimates are reasonable compared to the raw data
+```{r}
+plot(out.L.meta.UV.all, all_models = TRUE, add.NEC = TRUE)
+```
+
+Based on plots the following models should be excluded:
+    - ECxLinear
+    - ECxExp
+
+
+Remove models where chains did not converge or that do not make sense graphically
+```{r}
+out.L.meta.UV.mod <- modify_jagsMANEC(out.L.meta.UV.all, drop.models = c("ECxExp", "ECxLinear"))
+```
+
+
+Check for overdispersion
+```{r}
+out.L.meta.UV.mod$mod.stats
+```
+
+Overdispersion parameters of all candidate models < 1.
+
+
+View the MANEC
+```{r}
+plot(out.L.meta.UV.mod, add.EC10 = TRUE, add.NEC = FALSE)
+```
+
+
+
+
+Re-fit with over.disp=TRUE
+```{r}
+out.L.meta.UV.all.od <- fit.jagsMANEC(data = data.L.meta.UV, 
+                        x.var = "log.x", 
+                        y.var = "suc", 
+                        trials.var = "tot",
+                        model.set = "all",
+                        burnin = 20000,
+                        over.disp = TRUE)
+beep("mario")
+save(out.L.meta.UV.all, file = "2017.11_LmetaUV_modfits3.RData")
+load("2017.11_LmetaUV_modfits3.RData")
+```
+
+```{r}
+check.chains(out.L.meta.UV.all.od)
+```
+
+Some evidence of poor chain mixing or autocorrelation observed for:
+    - ECxWeibull1 (beta)
+    - ECxsigmoidal (d)
+    - NEC4param
+
+Evidence of poor chain mixing observed for:
+    - ECxWeibull2 (beta)
+    - ECx4param (beta)
+    - NECsigmoidal (NEC & d)
+
+    
+    
+```{r}
+plot(out.L.meta.UV.all.od, add.EC10 = TRUE, add.NEC = FALSE)
+```
+
+```{r}
+plot(out.L.meta.UV.all.od, all_models = T, add.NEC = TRUE)
+```
+
+Based on plots the following models should be excluded:
+    - NECHormesis
+    - NECsigmoidal
+    - ECxLinear
+    - ECxExp
+    - ECxSigmoidal
+
+
+Remove inappropriate candidate models
+```{r}
+out.L.meta.UV.mod.od <- modify_jagsMANEC(out.L.meta.UV.all.od, drop.models = c("NECHormesis", "NECsigmoidal", "ECxLinear", "ECxExp", "ECxsigmoidal"))
+```
+
+```{r}
+plot(out.L.meta.UV.mod.od, all_models = T, add.NEC = TRUE)
+```
+
+
+```{r}
+out.L.meta.UV.mod.od$mod.stats
+```
+
+All models show strong evidence of underdispersion. 
+
+
+
+Compare beta distribution MANEC fit to binomial distribution MANEC fit
+```{r}
+plot(out.L.meta.UV.mod.od, add.EC10 = TRUE, add.NEC = FALSE)
+```
+
+```{r}
+plot(out.L.meta.UV.mod, add.EC10 = TRUE, add.NEC = FALSE)
+```
+
+
+Similarly as for -UV data the MANEC fitted using the beta distribution had a poorer fit at high treatment concentrations but the EC10  estimates remained more or less unchanged. 
+
+
+
+
+Rename model output for selected model
+```{r}
+out.L.meta.UV <- out.L.meta.UV.mod
+```
+
+
+
+```{r}
+out.L.meta.UV.NEC <- modify_jagsMANEC(out.L.meta.UV, drop.models = c("ECx4param", "ECxWeibull1", "ECxWeibull2"))
+```
+
+```{r}
+plot(out.L.meta.UV.NEC)
+```
+
+
+
+
+Save the output for the selected model
+```{r}
+save(out.L.meta.UV, file = "2017.11_LmetaUV_modfit.RData")
+load("2017.11_LmetaUV_modfit.RData")
+save(out.L.meta.UV.NEC, file = "2017.11_LmetaUV_modfit_NEC.RData")
+load("2017.11_LmetaUV_modfit_NEC.RData")
+```
+
+
+
+
+
+##### Extract results
+
+Extract NEC, EC10 and EC50 (with 95% credible intervals) from posterior and backtransform if required
+
+
+```{r}
+NEC.L.meta.UV <- out.L.meta.UV.NEC$NEC
+NEC.L.meta.UV <- 10^NEC.L.meta.UV
+NEC.L.meta.UV
+```
+
+
+```{r}
+EC10.L.meta.UV <- extract_ECx(out.L.meta.UV, ECx.val = 10, type = "absolute")
+EC10.L.meta.UV <- 10^EC10.L.meta.UV
+EC10.L.meta.UV
+```
+
+```{r}
+EC50.L.meta.UV <- extract_ECx(out.L.meta.UV, ECx.val = 50, type = "absolute")
+EC50.L.meta.UV <- 10^EC50.L.meta.UV
+EC50.L.meta.UV
+```
+
+
+
+Extract complete posteriors for use in plotting and model comparison
+```{r}
+pred.L.meta.UV <- out.L.meta.UV$pred.vals
+str(pred.L.meta.UV)
+save(pred.L.meta.UV, file = "2017.11_LmetaUV_predvals.RData")
+```
+
+```{r}
+pred.L.meta.UV.NEC <- out.L.meta.UV.NEC$pred.vals
+str(pred.L.meta.UV.NEC)
+save(pred.L.meta.UV.NEC, file = "2017.11_LmetaUVNEC_predvals.RData")
+```
+
+
+
+
+#### PLot results
+
+```{r}
+library(ggplot2)
+library(scales)
+```
+
+
+
+##### Combined "all models subset" plot
+
+```{r}
+p0= ggplot()
+#p0= p0+ geom_point(data = data.L.meta.PAR.raw, aes(x = raw.x, y = prop, colour=factor(factor), alpha = 0.3), size = data.L.meta.PAR.raw$tot*0.2, position=position_jitter(width = .025, height=0.03))
+#p0= p0+ geom_point(data = data.L.meta.UV.raw, aes(x = raw.x, y = prop, colour=factor(factor), alpha = 0.3), size = data.L.meta.UV.raw$tot*0.2, position=position_jitter(width = .025, height=0.03))
+p0= p0+ scale_color_manual(values = c("UV" = "steelblue", "PAR" = "seagreen")) + theme_light()
+p0= p0+  geom_ribbon(aes(x=10^pred.L.meta.PAR$x, ymin=pred.L.meta.PAR$lw, ymax=pred.L.meta.PAR$up, fill="seagreen"),  alpha=0.3) #Seagreen HEX code: #2e8b57
+#p0= p0+  scale_fill_manual(values=c("seagreen", "steelblue"))
+p0= p0+  geom_ribbon(aes(x=10^pred.L.meta.UV$x, ymin=pred.L.meta.UV$lw, ymax=pred.L.meta.UV$up,fill="steelblue",  alpha=0.3))
+#p0= p0+  scale_fill_manual(values="steelblue")
+p0= p0+ geom_line(aes(x=10^pred.L.meta.PAR$x, y=pred.L.meta.PAR$y), color = 'grey30', size=0.5)
+p0= p0+ geom_line(aes(x=10^pred.L.meta.UV$x, y=pred.L.meta.UV$y), color = 'grey30', size=0.5)
+p0= p0+ geom_point(data = data.L.meta.PAR.raw, aes(x = raw.x, y = prop, colour=factor(factor), alpha = 0.3), size = data.L.meta.PAR.raw$tot*0.2, position=position_jitter(width = .025, height=0.03))
+p0= p0+ geom_point(data = data.L.meta.UV.raw, aes(x = raw.x, y = prop, colour=factor(factor), alpha = 0.3), size = data.L.meta.UV.raw$tot*0.2, position=position_jitter(width = .025, height=0.03))
+p0 = p0+ labs(x=expression(), #Concentration~(μg~TAH~"L"^{-1})
+              y=expression(Larval~metamorphosis~("%")),
+              subtitle="a)")
+p0= p0+ scale_y_continuous( limits = c(-0.03, 1.05), breaks = c(0, 0.25, 0.5, 0.75, 1.0), labels = c(0, 25, 50, 75, 100)) 
+p0= p0+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.border = element_blank(), axis.line = element_line(colour = "grey80"))
+p0= p0+ scale_fill_manual(values = c("seagreen", "steelblue"))
+p0= p0+ theme(legend.position="none")
+# p0 = p0  + theme(legend.position = c(0.9, 0.9))
+p0= p0+ scale_x_continuous(limits = c(0.28, 1000), trans="log10", breaks = c(0.3, 1, 10, 100, 1000), labels = c(0, 1, 10, 100, 1000))
+#p0= p0+ facet_wrap(~factor, nrow = 1)
+p0
+```
+
+```{r}
+LmetaModfitplotNov <- p0
+save(LmetaModfitplotNov, file = "2017.11_Lmetamodfitplot.RData")
+```
+
+
+##### Combined "NEC subset" plot
+
+```{r}
+p0= ggplot()
+#p0= p0+ geom_point(data = data.L.meta.PAR.raw, aes(x = raw.x, y = prop, colour=factor(factor), alpha = 0.3), size = data.L.meta.PAR.raw$tot*0.2, position=position_jitter(width = .025, height=0.03))
+#p0= p0+ geom_point(data = data.L.meta.UV.raw, aes(x = raw.x, y = prop, colour=factor(factor), alpha = 0.3), size = data.L.meta.UV.raw$tot*0.2, position=position_jitter(width = .025, height=0.03))
+p0= p0+ scale_color_manual(values = c("UV" = "steelblue", "PAR" = "seagreen")) + theme_light()
+p0= p0+  geom_ribbon(aes(x=10^pred.L.meta.PAR.NEC$x, ymin=pred.L.meta.PAR.NEC$lw, ymax=pred.L.meta.PAR.NEC$up, fill="seagreen"),  alpha=0.3) #Seagreen HEX code: #2e8b57
+#p0= p0+  scale_fill_manual(values=c("seagreen", "steelblue"))
+p0= p0+  geom_ribbon(aes(x=10^pred.L.meta.UV.NEC$x, ymin=pred.L.meta.UV.NEC$lw, ymax=pred.L.meta.UV.NEC$up,fill="steelblue",  alpha=0.3))
+#p0= p0+  scale_fill_manual(values="steelblue")
+p0= p0+ geom_line(aes(x=10^pred.L.meta.PAR.NEC$x, y=pred.L.meta.PAR.NEC$y), color = 'grey30', size=0.5)
+p0= p0+ geom_line(aes(x=10^pred.L.meta.UV.NEC$x, y=pred.L.meta.UV.NEC$y), color = 'grey30', size=0.5)
+p0= p0+ geom_point(data = data.L.meta.PAR.raw, aes(x = raw.x, y = prop, colour=factor(factor), alpha = 0.3), size = data.L.meta.PAR.raw$tot*0.2, position=position_jitter(width = .025, height=0.03))
+p0= p0+ geom_point(data = data.L.meta.UV.raw, aes(x = raw.x, y = prop, colour=factor(factor), alpha = 0.3), size = data.L.meta.UV.raw$tot*0.2, position=position_jitter(width = .025, height=0.03))
+p0 = p0+ labs(x=expression(Concentration~(μg~TAH~"L"^{-1})),
+              y=expression(Larval~metamorphosis~("%")),
+              subtitle="c)")
+p0= p0+ scale_y_continuous( limits = c(-0.03, 1.05), breaks = c(0, 0.25, 0.5, 0.75, 1.0), labels = c(0, 25, 50, 75, 100)) 
+p0= p0+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.border = element_blank(), axis.line = element_line(colour = "grey80"))
+p0= p0+ scale_fill_manual(values = c("seagreen", "steelblue"))
+p0= p0+ theme(legend.position="none")
+# p0 = p0  + theme(legend.position = c(0.9, 0.9))
+p0= p0+ scale_x_continuous(limits = c(0.28, 1000), trans="log10", breaks = c(0.3, 1, 10, 100, 1000), labels = c(0, 1, 10, 100, 1000))
+#p0= p0+ facet_wrap(~factor, nrow = 1)
+p0
+```
+
+```{r}
+LmetaNECfitplotNov <- p0
+save(LmetaNECfitplotNov, file = "2017.11_LmetaNECfitplot.RData")
+```
+
+
+#### Compare +/-UV posteriors
+
+Ensure dependency packages are loaded
+```{r}
+library(dplyr)
+library(tidybayes)
+library(jagsNEC) #for manual function use
+library(R2jags) #for manual function use
+library(ggplot2)
+```
+
+
+##### NEC
+
+
+```{r}
+comp.L.meta.NEC <- compare_posterior(out.L.meta.PAR.NEC, out.L.meta.UV.NEC, comparison = "NEC") #1st model=blue, 2nd model=orange; #place PAR model first and UV model second for colour matching in custom plots
+comp.L.meta.NEC
+```
+
+For custom plotting of NEC comparison
+```{r}
+p1 = ggplot(comp.L.meta.NEC$df3.s, aes(x=PS))+geom_density(aes(group=curve, color =curve , fill=curve), alpha=0.4) #df3.s is an object returned by compare_posterior()
+p1 = p1 + stat_pointinterval(aes(y = 0.00, x = PS, group=curve),.width = c(.66, .95), size=0.5)+
+  theme_light()
+p1 = p1+scale_fill_manual( values = c("seagreen", "steelblue"))+
+  scale_color_manual(values = c("grey","grey", "steelblue1","steelblue", "grey","grey", "grey","grey"))+theme(legend.position="none")
+p1 = p1 + scale_y_continuous(limits = c(-0.5, 18), name ="Posterior probability density") 
+p1 = p1 + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.border = element_blank(), axis.line = element_line(colour = "grey80"))
+p1 = p1 + scale_x_continuous(limits = c(-0.8, 3.3), breaks = c(0, 1, 2, 3), labels = c(1, 10, 100, 1000)) #update breaks+labels to match the scale given by the automatic compare_posterior output
+p1 = p1 + labs(x=expression(Threshold~concentration~(μg~TAH~"L"^{-1})),
+               subtitle="d)")
+p1= p1+ annotate("text", label = expression(Probability~of~NEC~difference), x = 0.55, y = 15.3, size = 2.8, colour = "grey20") #0.8 of the max y-axis limit
+p1= p1+ annotate("text", label = "UV > PAR = 100%", x = 0.55, y = 13.86, size = 2.4, colour = "grey20") #0.906 of the first annotation
+p1
+```
+
+Rename and save plot
+```{r}
+LmetaNECcompNov <- p1
+save(LmetaNECcompNov, file = "2017.11_LmetaNECcomp.RData")
+```
+
+
+
+For custom plotting of NEC differences posterior density
+```{r}
+p2 = ggplot(comp.L.meta.NEC$df4.s, aes(x=comp.L.meta.NEC$df4.s$diff))+geom_density(aes(x=comp.L.meta.NEC$df4.s$diff, fill = 'grey'), alpha=0.4)+ #df4.s is an object returned by compare_posterior()
+  stat_pointinterval(aes(y = 0.00, x = comp.L.meta.NEC$df4.s$diff),.width = c(.66, .95))+
+   geom_vline(xintercept = 0, color = "red", lty = 2)+ theme_light()
+p2 = p2+scale_fill_manual( values = c("grey", "grey"))+
+  scale_color_manual( values = c("grey","grey", "steelblue1","steelblue4", "grey","grey", "grey","grey"))+theme(legend.position="none")
+p2 = p2 + scale_y_continuous(name ="Differences posterior density") 
+p2 = p2 + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.border = element_blank(), axis.line = element_line(colour = "grey80"))
+p2 = p2 + scale_x_continuous(name ="Standardized effect size") 
+p2
+#save(p2, file = "2017.11_LmetaNECdiff.RData")
+```
+
+
+
+
+##### EC50
+
+
+Perform comparison of posterior distributions for metamorphosis EC50
+```{r}
+comp.L.meta.EC50 <- compare_posterior(out.L.meta.PAR, out.L.meta.UV, comparison="ECx", ECx.val = 50) #place PAR model first and UV model second for colour matching in custom plots
+comp.L.meta.EC50
+```
+
+
+For custom plotting of EC50 comparison
+```{r}
+p1 = ggplot(comp.L.meta.EC50$df3.s, aes(x=PS))+geom_density(aes(group=curve, color =curve , fill=curve), alpha=0.4) #df3.s is an object returned by compare_posterior()
+p1 = p1 + stat_pointinterval(aes(y = 0.00, x = PS, group=curve),.width = c(.66, .95), size=0.5)+
+  theme_light()
+p1 = p1+scale_fill_manual( values = c("seagreen", "steelblue"))+
+  scale_color_manual(values = c("grey","grey", "steelblue1","steelblue", "grey","grey", "grey","grey"))+theme(legend.position="none")
+p1 = p1 + scale_y_continuous(limits = c(-0.5, 18), name ="Posterior probability density") 
+p1 = p1 + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.border = element_blank(), axis.line = element_line(colour = "grey80"))
+p1 = p1 + scale_x_continuous(limits = c(-0.8, 3.3), breaks = c(0, 1, 2, 3), labels = c(1, 10, 100, 1000)) #update breaks+labels to match the scale given by the automatic compare_posterior output
+p1 = p1 + labs(x=expression(), #EC50~(μg~TAH~"L"^{-1})
+               subtitle="b)")
+p1= p1+ annotate("text", label = expression(Probability~of~EC[50]~difference), x = 0.55, y = 15.3, size = 2.8, colour = "grey20") #0.8 of the max y-axis limit
+p1= p1+ annotate("text", label = "UV > PAR = 100%", x = 0.55, y = 13.86, size = 2.4, colour = "grey20") #0.906 of the first annotation
+p1
+```
+
+```{r}
+LmetaEC50compNov <- p1
+save(LmetaEC50compNov, file = "2017.11_LmetaEC50comp.RData")
+```
+
+
+
+For custom plotting of EC50 differences posterior density
+```{r}
+p2 = ggplot(comp.L.meta.EC50$df4.s, aes(x=comp.L.meta.EC50$df4.s$diff))+geom_density(aes(x=comp.L.meta.EC50$df4.s$diff, fill = 'grey'), alpha=0.4)+ #df4.s is an object returned by compare_posterior()
+  stat_pointinterval(aes(y = 0.00, x = comp.L.meta.EC50$df4.s$diff),.width = c(.66, .95))+
+   geom_vline(xintercept = 0, color = "red", lty = 2)+ theme_light()
+p2 = p2+scale_fill_manual( values = c("grey", "grey"))+
+  scale_color_manual( values = c("grey","grey", "steelblue1","steelblue4", "grey","grey", "grey","grey"))+theme(legend.position="none")
+p2 = p2 + scale_y_continuous(name ="Differences posterior density") 
+p2 = p2 + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.border = element_blank(), axis.line = element_line(colour = "grey80"))
+p2 = p2 + scale_x_continuous(name ="Standardized effect size") 
+p2
+#save(p2, file = "2017.11_LmetaEC50diff.RData")
+```
+
+
+
+### Create layouts and export
+
+```{r}
+#devtools::install_github("kassambara/ggpubr")
+library(ggpubr)
+```
+
+
+Create layout
+
+Load graphics
+```{r}
+load("2017.11_Lmetamodfitplot.RData") #LmetaModfitplotNov
+load("2017.11_LmetaEC50comp.RData") #LmetaEC50compNov
+load("2017.11_LmetaNECfitplot.RData") #LmetaNECfitplotNov
+load("2017.11_LmetaNECcomp.RData") #LmetaNECcompNov
+```
+
+
+```{r}
+layout.L.meta <- ggarrange(LmetaModfitplotNov, LmetaEC50compNov, LmetaNECfitplotNov, LmetaNECcompNov,
+          ncol = 2, nrow = 2,
+          widths = c(0.5, 0.5))
+layout.L.meta
+```
+

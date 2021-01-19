@@ -1,0 +1,738 @@
+---
+title: "2017.12 Larval survival PAR"
+author: "Mikaela Nordborg"
+date: "12/08/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Background
+Analysis of data sets from A. millepora embryo experiment performed in  December 2017 to test the effects of heavy fuel oil WAF in the presence and absence of ultraviolet radiation (+UV vs -UV). All analysis performed in (at least) four steps:
+    - Model fitting, evaluation and interpretation of -UV/PAR only treatment data
+    - Model fitting, evaluation and interpretation of +UV treatment data
+    - Extraction of no effect concentration (NEC), 10 and 50% effect or lethal concentrations (EC/LCx) and associated 95% credible intervals.
+    - Comparison of posterior distributions of extracted NEC and 50% threshold concentrations for each light treatment (+/-UV).
+
+Compromised or invalid replicates identified prior to data import into R but removal is performed after import. Please see methods of main paper and *Table ___*, Supplementary materials for further details. Control treatment (filtered seawater) set as one third of the lowest treatment concentration used in each assays to avoid potential issues with transformations after data import. Treatment concentrations log10 transformed and analysed on log-scale due to the spacing of treatment concentrations and range covered (equal to or larger than 3 orders of magnitude).
+
+
+A majority of the data sets consist of binomial data and the following terms are used throughout:
+    year = year and month experiment was performed
+    endpoint = endpoint assessed
+    factor = light treatment used
+        PAR = -UV/in the absence of UV light
+        UV = +UV/in the presence of UV light
+    raw.x = time averaged, measured treatment concentration in μg TAH L-1
+    log.x = log10-transfomred, time-averaged, treatment concentrations (measured in μg TAH L-1)
+    suc = number of successes in sample (eg number of successfully settled larvae)
+    tot = total number of organisms in sample
+    prop = proportion of successes out of total tries/organisms in the sample
+    use_in_model = Yes/No, used to filter out samples/replicates that should not be used for model fitting
+    reason_for_exclusion = outlines the reason for why a sample/replicate was excluded from model fitting
+    comments = if further information regarding a sample/replicate may be relevant
+
+
+Embryonic survival data available for three time points: 48h, 96h and 192h. Each dataset analysed separately
+
+Please note, where survival analyses replicates had an increased number of embryos/larvae relative to start of exposure (due to fragmentation) the suc variable was adjusted to match tot (ie 100% survival) to enable statistical analysis using a No Effect Concentration-model. Please see 'Comments' column of data sheet for details on which replicates were adjusted prior to import into R.
+
+
+Analysis performed by Mikaela Nordborg.
+
+
+## Packages used and installation of latest version of jagsNEC
+
+Analysis performed using package jagsNEC and it's dependencies. The latest version of jagsNEC installed prior to start of analysis (20 July 2020).
+
+```{r}
+#devtools::install_github("AIMS/NEC-estimation")
+library(jagsNEC)
+library(R2jags)
+require(tidyverse)
+library(beepr)
+```
+
+
+
+## Embryonic survival 
+
+### 48h
+
+#### Import data, check data type and perform data preparation if required
+
+Import data
+```{r}
+data.E.surv192.Dec.raw <- read_csv("Data/2017.12_HFO_embryo_surv_192h.csv")
+str(data.E.surv192.Dec.raw)
+head(data.E.surv192.Dec.raw)
+```
+
+Initial data wrangling
+```{r}
+data.E.surv192.Dec.raw <- as.data.frame(data.E.surv192.Dec.raw)
+data.E.surv192.Dec.raw$raw.x <- as.numeric(as.character(data.E.surv192.Dec.raw$raw.x))
+str(data.E.surv192.Dec.raw)
+data.E.surv192.Dec.raw$suc <- as.integer(data.E.surv192.Dec.raw$suc)
+data.E.surv192.Dec.raw$tot <- as.integer(data.E.surv192.Dec.raw$tot)
+str(data.E.surv192.Dec.raw)
+data.E.surv192.Dec.raw$prop <- as.numeric(as.character(data.E.surv192.Dec.raw$prop))
+str(data.E.surv192.Dec.raw)
+head(data.E.surv192.Dec.raw)
+tail(data.E.surv192.Dec.raw)
+```
+
+
+Check what treatment concentrations were used 
+```{r}
+unique(data.E.surv192.Dec.raw$raw.x)
+```
+
+Add a small value (~1 order of magnitude less than the lowest treatment concentrations used) to raw.x for 0 ug/L replicates (filtered seawater control) to avoid issues with transformations
+```{r}
+data.E.surv192.Dec.raw <- data.E.surv192.Dec.raw %>%
+                            mutate(raw.x=ifelse(raw.x==0, 0.3, data.E.surv192.Dec.raw$raw.x))
+head(data.E.surv192.Dec.raw)
+tail(data.E.surv192.Dec.raw)
+```
+
+
+Add a log.x variable
+```{r}
+data.E.surv192.Dec.raw <- mutate(data.E.surv192.Dec.raw, log.x = log10(data.E.surv192.Dec.raw$raw.x))
+str(data.E.surv192.Dec.raw)
+head(data.E.surv192.Dec.raw)
+```
+
+
+Filter according to light treatment
+```{r}
+data.E.surv192.PAR.raw <- filter(data.E.surv192.Dec.raw, factor=="PAR")
+save(data.E.surv192.PAR.raw, file = "2017.12_data.E.surv192.PAR.raw_pois.RData")
+data.E.surv192.UV.raw <- filter(data.E.surv192.Dec.raw, factor=="UV")
+save(data.E.surv192.UV.raw, file = "2017.12_data.E.surv192.UV.raw_pois.RData")
+```
+
+
+Filter according to whether replicates are to be included when fitting models or not
+```{r}
+data.E.surv192.PAR <- filter(data.E.surv192.PAR.raw, use_in_model=="Yes")
+data.E.surv192.UV <- filter(data.E.surv192.UV.raw, use_in_model=="Yes")
+```
+
+
+#### -UV/PAR
+
+
+##### Initial data exploration
+
+Check distribution of response variable and range of treatment concentrations used
+```{r}
+range(data.E.surv192.PAR$raw.x)
+par(mfrow=c(2,1))
+hist(data.E.surv192.PAR$raw.x)
+hist(data.E.surv192.PAR$suc/data.E.surv192.PAR$tot)
+par(mfrow=c(1,1))
+plot(data.E.surv192.PAR$log.x, data.E.surv192.PAR$prop)
+```
+
+
+###### Fit models
+
+```{r}
+out.E.surv192.PAR.all <- fit.jagsMANEC(data = data.E.surv192.PAR, 
+                        x.var = "log.x", 
+                        y.var = "suc", 
+                        model.set = "all",
+                        burnin = 10000)
+beep("mario")
+save(out.E.surv192.PAR.all, file = "2017.12_Esurv192PAR_pois_modfit1.RData")
+load("2017.12_Esurv192PAR_pois_modfit1.RData")
+```
+
+
+```{r}
+check.chains(out.E.surv192.PAR.all)
+```
+
+Evidence of poor chain mixing or potential autocorrelation observed for several candidate models, refit with longer burn-in and higher iterations.
+
+
+
+Re-fit using a longer burn-in and higher iterations
+```{r}
+out.E.surv192.PAR.all <- fit.jagsMANEC(data = data.E.surv192.PAR, 
+                        x.var = "log.x", 
+                        y.var = "suc", 
+                        model.set = "all",
+                        burnin = 20000)
+beep("mario")
+save(out.E.surv192.PAR.all, file = "2017.12_Esurv192PAR_pois_modfit2.RData")
+load("2017.12_Esurv192PAR_pois_modfit2.RData")
+```
+
+```{r}
+check.chains(out.E.surv192.PAR.all)
+```
+
+Some indications of poor chain mixing or autocorrelation for:
+    - ECxsigmoidal (d)
+    - ECx4param (beta)
+    - NEC4param (beta & SSsim)
+    - NEC3param (SS & SSsim)
+    - NECHormesis (SS, SSsim & slope)
+    - NEC3param (SS & SSsim)
+
+Poor chain mixing or autocorrelation observed for:
+    - ECxWeibull2 (beta, SS & SSsim)
+    - ECxWeibull1 (beta & SS)
+
+Non-convergence observed for:
+    - NECsigmoidal
+    - NEC4param
+
+
+
+Check if model median, credible intervals and NEC estimate are reasonable compared to the raw data
+```{r}
+plot(out.E.surv192.PAR.all, all_models = TRUE, add.NEC = TRUE)
+```
+Based on graphical evaluation of model fit the following should be excluded:
+    - ECxLinear
+    - ECxExp
+    - ECxsigmoidal
+    
+
+```{r}
+plot(out.E.surv192.PAR.all, add.EC10 = FALSE, add.NEC = FALSE)
+```
+
+
+Drop inappropriate models and models with non-convergence
+```{r}
+out.E.surv192.PAR.mod <- modify_jagsMANEC(out.E.surv192.PAR.all, drop.models = c("ECxExp", "ECxLinear", "ECxsigmoidal", "NECsigmoidal", "NEC4param"))
+```
+
+```{r}
+plot(out.E.surv192.PAR.mod, add.EC10 = FALSE, add.NEC = FALSE)
+```
+
+```{r}
+plot(out.E.surv192.PAR.mod, all_models = TRUE, add.NEC = TRUE)
+```
+
+
+Check for evidence of overdispersion for remaining models
+```{r}
+out.E.surv192.PAR.mod$mod.stats
+```
+
+All models showed some evidence of underdispersion. 
+
+
+
+
+Rename model output for selected model
+```{r}
+out.E.surv192.PAR <- out.E.surv192.PAR.mod
+```
+
+
+Create model output for NEC subset
+```{r}
+out.E.surv192.PAR.NEC <- modify_jagsMANEC(out.E.surv192.PAR, drop.models = c("ECx4param", "ECxWeibull1", "ECxWeibull2"))
+```
+
+
+
+Save the output for the selected model
+```{r}
+save(out.E.surv192.PAR, file = "2017.12_Esurv192PAR_pois_modfit.RData")
+load("2017.12_Esurv192PAR_pois_modfit.RData")
+save(out.E.surv192.PAR.NEC, file = "2017.12_Esurv192PAR_pois_modfit_NEC.RData")
+load("2017.12_Esurv192PAR_pois_modfit_NEC.RData")
+```
+
+
+
+
+##### Extract results
+
+
+Extract NEC, LC10 and LC50 (with 95% credible intervals) from posterior and backtransform if required
+
+```{r}
+NEC.E.surv192.PAR <- out.E.surv192.PAR.NEC$NEC
+NEC.E.surv192.PAR <- 10^NEC.E.surv192.PAR
+NEC.E.surv192.PAR
+```
+
+
+```{r}
+LC10.E.surv192.PAR <- extract_ECx(out.E.surv192.PAR, ECx.val = 10, type = "absolute")
+LC10.E.surv192.PAR <- 10^LC10.E.surv192.PAR
+LC10.E.surv192.PAR
+```
+
+```{r}
+LC50.E.surv192.PAR <- extract_ECx(out.E.surv192.PAR, ECx.val = 50, type = "absolute")
+LC50.E.surv192.PAR <- 10^LC50.E.surv192.PAR
+LC50.E.surv192.PAR
+```
+
+
+
+
+Extract complete posteriors for use in plotting and comparisons between light treatments
+```{r}
+pred.E.surv192.PAR <- out.E.surv192.PAR$pred.vals
+str(pred.E.surv192.PAR)
+save(pred.E.surv192.PAR, file = "2017.12_pred.E.surv192.PAR_pois.Rdata")
+load("2017.12_pred.E.surv192.PAR_pois.Rdata")
+```
+
+```{r}
+pred.E.surv192.PAR.NEC <- out.E.surv192.PAR.NEC$pred.vals
+str(pred.E.surv192.PAR.NEC)
+save(pred.E.surv192.PAR.NEC, file = "2017.12_pred.E.surv192.PAR.NEC_pois.Rdata")
+load("2017.12_pred.E.surv192.PAR.NEC_pois.Rdata")
+```
+
+
+#### +UV/UV
+
+
+##### Initial data exploration
+
+Check distribution of response variable and range of treatment concentrations used
+```{r}
+unique(data.E.surv192.UV$raw.x)
+par(mfrow=c(2,1))
+hist(data.E.surv192.UV$raw.x)
+hist(data.E.surv192.UV$suc/data.E.surv192.UV$tot)
+par(mfrow=c(1,1))
+plot(data.E.surv192.UV$log.x, data.E.surv192.UV$prop)
+```
+
+
+
+##### Fit models
+
+Fit a model-averaged NEC model
+```{r}
+out.E.surv192.UV.all <- fit.jagsMANEC(data = data.E.surv192.UV, 
+                        x.var = "log.x", 
+                        y.var = "suc", 
+                        model.set = "all",
+                        burnin = 10000)
+save(out.E.surv192.UV.all, file = "2017.12_Esurv192UV_pois_modfits1.RData")
+load("2017.12_Esurv192UV_pois_modfits1.RData")
+beep("mario")
+```
+
+
+Check chain mixing and aurocorrelation for each model fit
+```{r}
+check.chains(out.E.surv192.UV.all)
+```
+
+Indications of poor chain mixing and autocorrelation observed for several of the models fitted. 
+
+
+
+
+Re-fit with higher burn-in and iterations
+```{r}
+out.E.surv192.UV.all <- fit.jagsMANEC(data = data.E.surv192.UV, 
+                        x.var = "log.x", 
+                        y.var = "suc", 
+                        model.set = "all",
+                        burnin = 20000)
+save(out.E.surv192.UV.all, file = "2017.12_Esurv192UV_pois_modfits2.RData")
+load("2017.12_Esurv192UV_pois_modfits2.RData")
+beep("mario")
+```
+
+```{r}
+check.chains(out.E.surv192.UV.all)
+```
+
+Minor indications of poor chain mixing or autocorrelation observed for:
+    - ECxWeibull2 (beta & SS)
+    - ECxsigmoidal (d)
+    - NEC3param (SS)
+    
+Some indications of poor chain mixing or autocorrelation observed for:
+    - ECxWeibull1 (beta)
+    - NEC4param (beta & SS)
+
+Poor chain mixing and autocorrelation observed for:
+    - NEC Hormesis (SS, SSsim & slope)
+
+Non-convergence observed for:
+    - NECsigmoidal
+    
+
+
+```{r}
+plot(out.E.surv192.UV.all, add.EC10 = TRUE, add.NEC = FALSE)
+```
+
+
+
+
+
+Check if model median, credible intervals and NEC estimates are reasonable compared to the raw data
+```{r}
+plot(out.E.surv192.UV.all, all_models = TRUE, add.NEC = TRUE)
+```
+Based on graphical evaluation of model fit the following should be excluded:
+    - ECxLinear
+    - ECxExp
+    - ECxsigmoidal
+
+
+
+Remove models where chains did not converge or that do not make sense graphically
+```{r}
+out.E.surv192.UV.mod <- modify_jagsMANEC(out.E.surv192.UV.all, drop.models = c("NECsigmoidal", "NECHormesis", "ECxLinear", "ECxExp", "ECxsigmoidal"))
+```
+
+```{r}
+plot(out.E.surv192.UV.mod, add.NEC = TRUE, add.EC10 = TRUE)
+```
+
+```{r}
+plot(out.E.surv192.UV.mod, all_models = TRUE, add.NEC = TRUE)
+```
+
+
+Check for evidence of overdispersion
+```{r}
+out.E.surv192.UV.mod$mod.stats
+```
+
+No evidence of overdispersion.
+
+
+
+Rename model output for selected model
+```{r}
+out.E.surv192.UV <- out.E.surv192.UV.mod
+```
+
+
+Create model output for the NEC model-subset
+```{r}
+out.E.surv192.UV.NEC <- modify_jagsMANEC(out.E.surv192.UV, drop.models = c("ECx4param", "ECxWeibull1", "ECxWeibull2"))
+```
+
+
+
+Save the output for the selected model
+```{r}
+save(out.E.surv192.UV, file = "2017.12_Esurv192UV_pois_modfit.RData")
+load("2017.12_Esurv192UV_pois_modfit.RData")
+```
+
+
+```{r}
+save(out.E.surv192.UV.NEC, file = "2017.12_Esurv192UV_pois_modfit_NEC.RData")
+load("2017.12_Esurv192UV_pois_modfit_NEC.RData")
+```
+
+
+
+##### Extract results
+
+Extract NEC, LC10 and LC50 (with 95% credible intervals) from posterior and backtransform if required
+
+
+```{r}
+NEC.E.surv192.UV <- out.E.surv192.UV.NEC$NEC
+NEC.E.surv192.UV <- 10^NEC.E.surv192.UV
+NEC.E.surv192.UV
+```
+
+
+```{r}
+LC10.E.surv192.UV <- extract_ECx(out.E.surv192.UV, ECx.val = 10, type = "absolute")
+LC10.E.surv192.UV <- 10^LC10.E.surv192.UV
+LC10.E.surv192.UV
+```
+
+
+```{r}
+LC50.E.surv192.UV <- extract_ECx(out.E.surv192.UV, ECx.val = 50, type = "absolute")
+LC50.E.surv192.UV <- 10^LC50.E.surv192.UV
+LC50.E.surv192.UV
+```
+
+
+
+Extract complete posteriors for use in plotting and model comparison
+```{r}
+pred.E.surv192.UV <- out.E.surv192.UV$pred.vals
+str(pred.E.surv192.UV)
+save(pred.E.surv192.UV, file = "2017.12_pred.E.surv192.UV_pois.RData")
+load("2017.12_pred.E.surv192.UV_pois.RData")
+```
+
+
+```{r}
+pred.E.surv192.UV.NEC <- out.E.surv192.UV.NEC$pred.vals
+str(pred.E.surv192.UV.NEC)
+save(pred.E.surv192.UV.NEC, file = "2017.12_pred.E.surv192.UV.NEC_pois.RData")
+load("2017.12_pred.E.surv192.UV.NEC_pois.RData")
+```
+
+
+
+#### PLot results
+
+```{r}
+library(ggplot2)
+library(scales)
+```
+
+
+
+##### Combined "all models subset" plot
+
+```{r}
+p0= ggplot()
+p0= p0+ scale_color_manual(values = c("UV" = "steelblue", "PAR" = "seagreen")) + theme_light()
+#Add 95% credible intervals
+p0= p0+  geom_ribbon(aes(x=10^pred.E.surv192.PAR$x, ymin=pred.E.surv192.PAR$lw, ymax=pred.E.surv192.PAR$up, fill="seagreen"),  alpha=0.3)
+p0= p0+  geom_ribbon(aes(x=10^pred.E.surv192.UV$x, ymin=pred.E.surv192.UV$lw, ymax=pred.E.surv192.UV$up,fill="steelblue",  alpha=0.3))
+#Add model median
+p0= p0+ geom_line(aes(x=10^pred.E.surv192.PAR$x, y=pred.E.surv192.PAR$y), color = 'grey30', size=0.5)
+p0= p0+ geom_line(aes(x=10^pred.E.surv192.UV$x, y=pred.E.surv192.UV$y), color = 'grey30', size=0.5)
+#Add raw data points
+p0= p0+ geom_point(data = data.E.surv192.PAR.raw, aes(x = raw.x, y = suc, colour=factor(factor), alpha = 0.3), size = 2, position=position_jitter(width = .025, height=0.03))
+p0= p0+ geom_point(data = data.E.surv192.UV.raw, aes(x = raw.x, y = suc, colour=factor(factor), alpha = 0.3), size = 2, position=position_jitter(width = .025, height=0.03))
+#Adjust labels, axes, etc
+p0 = p0+ labs(x=expression(Concentration~(μg~TAH~"L"^{-1})),
+              y=expression(Embryo~192~h~latent~survival~("%")),
+              subtitle = "e)")
+p0= p0+ scale_y_continuous(limits = c(-0.95, 15), breaks = c(0, 5, 10, 15), labels = c(0, 5, 10, 15)) 
+p0= p0+ scale_x_continuous(limits = c(0.28, 1000), trans="log10", breaks = c(0.3, 1, 10, 100, 1000), labels = c(0, 1, 10, 100, 1000))
+p0= p0+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.border = element_blank(), axis.line = element_line(colour = "grey80"))
+p0= p0+ scale_fill_manual(values = c("seagreen", "steelblue"))
+p0= p0+ theme(legend.position="none")
+# p0 = p0  + theme(legend.position = c(0.9, 0.9))
+#p0= p0+ facet_wrap(~factor, nrow = 1)
+p0
+```
+
+```{r}
+Esurv192ModfitplotDec <- p0
+save(Esurv192ModfitplotDec, file = "2017.12_Esurv192modfitplot_pois.RData")
+```
+
+
+
+##### Combined "NEC subset" plot
+
+```{r}
+p0= ggplot()
+p0= p0+ scale_color_manual(values = c("UV" = "steelblue", "PAR" = "seagreen")) + theme_light()
+#Add 95% credible intervals
+p0= p0+  geom_ribbon(aes(x=10^pred.E.surv192.PAR.NEC$x, ymin=pred.E.surv192.PAR.NEC$lw, ymax=pred.E.surv192.PAR.NEC$up, fill="seagreen"),  alpha=0.3)
+p0= p0+  geom_ribbon(aes(x=10^pred.E.surv192.UV.NEC$x, ymin=pred.E.surv192.UV.NEC$lw, ymax=pred.E.surv192.UV.NEC$up,fill="steelblue",  alpha=0.3))
+#Add model median
+p0= p0+ geom_line(aes(x=10^pred.E.surv192.PAR.NEC$x, y=pred.E.surv192.PAR.NEC$y), color = 'grey30', size=0.5)
+p0= p0+ geom_line(aes(x=10^pred.E.surv192.UV.NEC$x, y=pred.E.surv192.UV.NEC$y), color = 'grey30', size=0.5)
+#Add raw data points
+p0= p0+ geom_point(data = data.E.surv192.PAR.raw, aes(x = raw.x, y = suc, colour=factor(factor), alpha = 0.3), size = 2, position=position_jitter(width = .025, height=0.03))
+p0= p0+ geom_point(data = data.E.surv192.UV.raw, aes(x = raw.x, y = suc, colour=factor(factor), alpha = 0.3), size = 2, position=position_jitter(width = .025, height=0.03))
+#Adjust labels, axes, etc
+p0 = p0+ labs(x=expression(Concentration~(μg~TAH~"L"^{-1})),
+              y=expression(Embryo~192~h~latent~survival~("%")),
+              subtitle = "e)")
+p0= p0+ scale_y_continuous(limits = c(-0.95, 15), breaks = c(0, 5, 10, 15), labels = c(0, 5, 10, 15)) 
+p0= p0+ scale_x_continuous(limits = c(0.28, 1000), trans="log10", breaks = c(0.3, 1, 10, 100, 1000), labels = c(0, 1, 10, 100, 1000))
+p0= p0+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.border = element_blank(), axis.line = element_line(colour = "grey80"))
+p0= p0+ scale_fill_manual(values = c("seagreen", "steelblue"))
+p0= p0+ theme(legend.position="none")
+# p0 = p0  + theme(legend.position = c(0.9, 0.9))
+#p0= p0+ facet_wrap(~factor, nrow = 1)
+p0
+```
+
+
+Rename and save plot
+```{r}
+Esurv192NECfitplotDec <- p0
+save(Esurv192NECfitplotDec, file = "2017.12_Esurv192NECfitplot_pois.RData")
+```
+
+
+
+#### Compare +/-UV posteriors
+
+Ensure dependency packages are loaded
+```{r}
+library(dplyr)
+library(tidybayes)
+library(jagsNEC) #for manual function use
+library(R2jags) #for manual function use
+library(ggplot2)
+```
+
+
+##### NEC
+
+Perform comparison of posterior distributions for survival NEC
+```{r}
+comp.E.surv192.NEC <- compare_posterior(out.E.surv192.PAR, out.E.surv192.UV, comparison = "NEC") #1st model=blue, 2nd model=orange; #place PAR model first and UV model second for colour matching in custom plots
+comp.E.surv192.NEC
+```
+
+```{r}
+100-2.2
+```
+
+
+
+For custom plotting of survival NEC comparison
+```{r}
+p1 = ggplot(comp.E.surv192.NEC$df3.s, aes(x=PS))+geom_density(aes(group=curve, color =curve , fill=curve), alpha=0.4) #df3.s is an object returned by compare_posterior()
+p1 = p1 + stat_pointinterval(aes(y = 0.00, x = PS, group=curve),.width = c(.66, .95), size=0.5)+
+  theme_light()
+p1 = p1+scale_fill_manual( values = c("seagreen", "steelblue"))+
+  scale_color_manual( values = c("grey","grey", "steelblue1","steelblue", "grey","grey", "grey","grey"))+theme(legend.position="none")
+p1 = p1 + scale_y_continuous(limits = c(-0.5, 10), breaks = c(0, 2, 4, 6, 8, 10), labels = c(0, 2, 4, 6, 8, 10), name ="Posterior probability density") 
+p1 = p1 + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.border = element_blank(), axis.line = element_line(colour = "grey80"))
+p1 = p1 + scale_x_continuous(limits = c(-0.6, 3.3), breaks = c(0, 1, 2, 3), labels = c(1, 10, 100, 1000)) 
+p1 = p1 + labs(x=expression(Threshold~concentration~(μg~TAH~"L"^{-1})),
+               subtitle = "f)")
+p1= p1+ annotate("text", label = expression(Probability~of~NEC~difference), x = 0.55, y = 8.5, size = 2.8, colour = "grey20") #0.85 of the max y-axis limit
+p1= p1+ annotate("text", label = "UV > PAR = 98%", x = 0.55, y = 7.7, size = 2.4, colour = "grey20")
+p1
+```
+
+Rename and save plot
+```{r}
+Esurv192NECcompDec <- p1
+save(Esurv192NECcompDec, file = "2017.12_Esurv192NECcomp_pois.RData")
+```
+
+
+
+
+For custom plotting of NEC differences posterior density
+```{r}
+p2 = ggplot(comp.E.surv192.NEC$df4.s, aes(x=comp.E.surv192.NEC$df4.s$diff))+geom_density(aes(x=comp.E.surv192.NEC$df4.s$diff, fill = 'grey'), alpha=0.4)+ #df4.s is an object returned by compare_posterior()
+  stat_pointinterval(aes(y = 0.00, x = comp.E.surv192.NEC$df4.s$diff),.width = c(.66, .95))+
+   geom_vline(xintercept = 0, color = "red", lty = 2)+ theme_light()
+p2 = p2+scale_fill_manual( values = c("grey", "grey"))+
+  scale_color_manual( values = c("grey","grey", "steelblue1","steelblue4", "grey","grey", "grey","grey"))+theme(legend.position="none")
+p2 = p2 + scale_y_continuous(name ="Differences posterior density") 
+p2 = p2 + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.border = element_blank(), axis.line = element_line(colour = "grey80"))
+p2 = p2 + scale_x_continuous(name ="Standardized effect size") 
+p2
+#save(p2, file = "2017.12_LsurvNECdiff.RData")
+```
+
+
+
+
+##### EC50
+
+
+Perform comparison of posterior distributions for survival LC50
+```{r}
+comp.E.surv192.LC50 <- compare_posterior(out.E.surv192.PAR, out.E.surv192.UV, comparison="ECx", ECx.val = 50) #place PAR model first and UV model second for colour matching in custom plots
+comp.E.surv192.LC50
+```
+
+
+For custom plotting of LC50 comparison
+```{r}
+p1 = ggplot(comp.E.surv192.LC50$df3.s, aes(x=PS))+geom_density(aes(group=curve, color =curve , fill=curve), alpha=0.4) #df3.s is an object returned by compare_posterior()
+p1 = p1 + stat_pointinterval(aes(y = 0.00, x = PS, group=curve),.width = c(.66, .95), size=0.5)+
+  theme_light()
+p1 = p1+scale_fill_manual( values = c("seagreen", "steelblue"))+
+  scale_color_manual( values = c("grey","grey", "steelblue1", "steelblue", "grey", "grey", "grey", "grey"))+theme(legend.position="none")
+p1 = p1 + scale_y_continuous(limits = c(-0.5, 10), breaks = c(0, 2, 4, 6, 8, 10), labels = c(0, 2, 4, 6, 8, 10), name ="Posterior probability density") 
+p1 = p1 + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.border = element_blank(), axis.line = element_line(colour = "grey80"))
+p1 = p1 + scale_x_continuous(limits = c(-0.6, 3.3), breaks = c(0, 1, 2, 3), labels = c(1, 10, 100, 1000))
+p1 = p1 + labs(x=expression(Threshold~concentration~(μg~TAH~"L"^{-1})),
+               subtitle = "f)")
+p1= p1+ annotate("text", label = expression(Probability~of~LC[50]~difference), x = 0.55, y = 8.5, size = 2.8, colour = "grey20") #0.8 of the max y-axis limit
+p1= p1+ annotate("text", label = "UV > PAR = 100%", x = 0.55, y = 7.7, size = 2.4, colour = "grey20")
+p1
+```
+
+```{r}
+Esurv192LC50compDec <- p1
+save(Esurv192LC50compDec, file = "2017.12_Esurv192LC50comp_pois.RData")
+```
+
+
+
+
+For custom plotting of LC50 differences posterior density
+```{r}
+p2 = ggplot(comp.E.surv192.LC50$df4.s, aes(x=comp.E.surv192.LC50$df4.s$diff))+geom_density(aes(x=comp.E.surv192.LC50$df4.s$diff, fill = 'grey'), alpha=0.4)+ #df4.s is an object returned by compare_posterior()
+  stat_pointinterval(aes(y = 0.00, x = comp.E.surv192.LC50$df4.s$diff),.width = c(.66, .95))+
+   geom_vline(xintercept = 0, color = "red", lty = 2)+ theme_light()
+p2 = p2+scale_fill_manual( values = c("grey", "grey"))+
+  scale_color_manual( values = c("grey","grey", "steelblue1","steelblue4", "grey","grey", "grey","grey"))+theme(legend.position="none")
+p2 = p2 + scale_y_continuous(name ="Differences posterior density") 
+p2 = p2 + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.border = element_blank(), axis.line = element_line(colour = "grey80"))
+p2 = p2 + scale_x_continuous(name ="Standardized effect size") 
+p2
+#save(p2, file = "2017.12_LsurvEC50diff.RData")
+```
+
+
+
+### Create layouts and export
+
+```{r}
+#devtools::install_github("kassambara/ggpubr")
+library(ggpubr)
+```
+
+
+Create layout
+
+Load graphics
+```{r}
+load("2017.12_data.E.surv192.PAR.raw_pois.RData") #data.E.surv192.PAR.raw
+load("2017.12_data.E.surv192.UV.raw_pois.RData") #data.E.surv192.UV.raw
+load("2017.12_pred.E.surv192.PAR_pois.Rdata") #pred.E.surv192.PAR
+load("2017.12_pred.E.surv192.UV_pois.RData") #pred.E.surv192.UV
+load("2017.12_Esurv192modfitplot_pois.RData") #Esurv192ModfitplotDec
+load("2017.12_Esurv192LC50comp_pois.RData") #Esurv192LC50compDec
+load("2017.12_pred.E.surv192.PAR.NEC_pois.Rdata") #pred.E.surv192.PAR.NEC
+load("2017.12_pred.E.surv192.UV.NEC_pois.RData") #pred.E.surv192.UV.NEC
+load("2017.12_Esurv192NECfitplot_pois.RData") #Esurv192NECfitplotDec
+load("2017.12_Esurv192NECcomp_pois.RData") #Esurv192NECcompDec
+```
+
+
+```{r}
+layout.E.surv <- ggarrange(Esurv192ModfitplotDec, Esurv192LC50compDec, Esurv192NECfitplotDec, Esurv192NECcompDec,
+          ncol = 2, nrow = 2,
+          widths = c(0.5, 0.5))
+layout.E.surv
+```
+
+
+
+
+Export layout
+```{r}
+pdf("test2.pdf", width = 8.27, height = 4.92) #height and width in inches
+layout.E.surv
+dev.off()
+```
+
+
+

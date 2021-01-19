@@ -1,0 +1,666 @@
+---
+title: "Ch 1.1 Results figure layouts"
+author: "Mikaela Nordborg"
+date: "03/08/2020"
+output: html_document
+---
+
+
+```{r}
+library(ggplot2)
+library(ggpubr)
+```
+
+
+# Main text result figures
+
+## Figure 1 - Fertilisation concentration-response, comparison of threhsold estiamtes + comparison of sperm conc impacts on oil tox outcomes
+
+### Load relevant data sets and graphics
+
+Nov 2018 fertilisation assay (~25% fert rate in controls; sperm conc ~1.5*10^3)
+```{r}
+load("2018.11_G.fert.Dark.raw.RData") #data.2018N.G.fert.Dark.raw
+load("2018.11_GfertDark_predvals.RData") #pred.2018N.G.fert.Dark
+load("2018.11_Gfertmodfitplot.RData") #Nov2018.GfertModfitplot
+```
+
+
+Dec 2019 fertilisation assay (>80% fert rate in controls; sperm conc ~1.2*10^6)
+```{r}
+load("2019.12_data.G.fert.Dark.raw.RData") #data.2019D.G.fert.Dark.raw
+load("2019.12_data.G.fert.PAR.raw.RData") #data.2019D.G.fert.PAR.raw
+load("2019.12_data.G.fert.UV.raw.RData") #data.2019D.G.fert.UV.raw
+load("2019.12_GfertDark_predvals.RData")
+load("2019.12_GfertPAR_predvals.RData")
+load("2019.12_GfertUV_predvals.RData")
+#load("2019.12_Gfertmodfitplot.RData") #Dec2019.GfertModfitplot
+load("2019.12_GfertEC50comp.RData") #Dec2019.GfertEC50comp
+```
+
+
+### Plot concentration response curves
+
+```{r}
+p0= ggplot()
+p0= p0+ scale_color_manual(values = c("Dark"="slategrey", "PAR"="seagreen", "UV"="steelblue")) + theme_light()
+#Add 95% credible intervals
+p0= p0+  geom_ribbon(aes(x=10^pred.2019D.G.fert.Dark$x, ymin=pred.2019D.G.fert.Dark$lw, ymax=pred.2019D.G.fert.Dark$up, fill="slategrey"),  alpha=0.3)
+p0= p0+  geom_ribbon(aes(x=10^pred.2019D.G.fert.PAR$x, ymin=pred.2019D.G.fert.PAR$lw, ymax=pred.2019D.G.fert.PAR$up, fill="seagreen"),  alpha=0.3)
+p0= p0+  geom_ribbon(aes(x=10^pred.2019D.G.fert.UV$x, ymin=pred.2019D.G.fert.UV$lw, ymax=pred.2019D.G.fert.UV$up,fill="steelblue"),  alpha=0.3)
+p0= p0+  geom_ribbon(aes(x=10^pred.2018N.G.fert.Dark$x, ymin=pred.2018N.G.fert.Dark$lw, ymax=pred.2018N.G.fert.Dark$up, fill="slategrey"),  alpha=0.3)
+#Add model median
+p0= p0+ geom_line(aes(x=10^pred.2019D.G.fert.Dark$x, y=pred.2019D.G.fert.Dark$y), color = 'grey30', size=0.5)
+p0= p0+ geom_line(aes(x=10^pred.2019D.G.fert.PAR$x, y=pred.2019D.G.fert.PAR$y), color = 'grey30', size=0.5)
+p0= p0+ geom_line(aes(x=10^pred.2019D.G.fert.UV$x, y=pred.2019D.G.fert.UV$y), color = 'grey30', size=0.5)
+p0= p0+ geom_line(aes(x=10^pred.2018N.G.fert.Dark$x, y=pred.2018N.G.fert.Dark$y), color = 'grey30', size=0.5)
+#Add raw data points
+p0= p0+ geom_point(data = data.2018N.G.fert.Dark.raw, aes(x = raw.x, y = prop ,colour=factor(factor), shape = factor(year), alpha = 0.2), size = data.2018N.G.fert.Dark.raw$tot*0.015, position=position_jitter(width = .025, height=0.02))
+p0= p0+ geom_point(data = data.2019D.G.fert.Dark.raw, aes(x = raw.x, y = prop, colour=factor(factor), shape = factor(year), alpha = 0.2), size = data.2019D.G.fert.Dark.raw$tot*0.015, position=position_jitter(width = .025, height=0.02))
+p0= p0+ geom_point(data = data.2019D.G.fert.PAR.raw, aes(x = raw.x, y = prop, colour=factor(factor), shape = factor(year), alpha = 0.2), size = data.2019D.G.fert.PAR.raw$tot*0.015, position=position_jitter(width = .025, height=0.02))
+p0= p0+ geom_point(data = data.2019D.G.fert.UV.raw, aes(x = raw.x, y = prop, colour=factor(factor), shape = factor(year), alpha = 0.2), size = data.2019D.G.fert.UV.raw$tot*0.02, position=position_jitter(width = .025, height=0.025))
+#Adjust axes, labeling etc
+p0 = p0+ labs(x=expression(Concentration~(μg~TAH~"L"^{-1})),
+              y=expression(Fertilisation~rate~("%")),
+              subtitle = "a)")
+p0= p0+ scale_y_continuous( limits = c(-0.025, 1.03), breaks = c(0, 0.25, 0.5, 0.75, 1.0), labels = c(0, 25, 50, 75, 100)) 
+p0= p0+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.border = element_blank(), axis.line = element_line(colour = "grey80"))
+p0= p0+ scale_fill_manual(values = c("seagreen", "slategrey", "steelblue")) #try changing the order of these around until the right band has the right colour!
+p0= p0+ theme(legend.position="none")
+#p0= p0+ theme(axis.title.x = element_text(colour = "grey20"), axis.title.y = element_text(colour = "grey20"))
+# p0 = p0  + theme(legend.position = c(0.9, 0.9))
+p0= p0+ scale_x_continuous(limits = c(0.018, 1000), trans="log10", breaks = c(0.02, 1, 10, 100, 1000), labels = c(0, 1, 10, 100, 1000))
+p0= p0+ annotate("text", label = "1.2·10^6 sperm ml-1", x = 0.15, y = 1, color = "grey20", size = 2.6)
+p0= p0+ annotate("text", label = "1.5·10^3 sperm ml-1", x = 0.15, y = 0.42, color = "grey20", size = 2.6)
+SpermConcComp.figure <- p0
+SpermConcComp.figure
+```
+
+
+###Create layout
+```{r}
+layout.main.1 <- ggarrange(p0, Dec2019.GfertEC50comp,
+          ncol = 2, nrow = 1,
+          widths = c(0.5, 0.5))
+layout.main.1
+```
+
+###Export
+
+```{r}
+pdf("Main_fig_1.pdf", width = 6.69, height = 2.78) #height and width in inches
+layout.main.1
+dev.off()
+```
+
+
+##Figure 2 - Embryonic assay
+
+###Load graphics
+* Embryonic survival 48h* Only have a NEC comparison
+```{r}
+load("2017.12_data.E.surv48.PAR.raw.RData")
+load("2017.12_data.E.surv48.UV.raw.RData")
+load("2017.12_Efertsurv48PAR_predvals.RData")
+load("2017.12_Efertsurv48UV_predvals.Rdata")
+load("2017.12_Esurv48modfitplot.RData") #Esurv48ModfitplotDec
+load("2017.12_Esurv48NECcomp.RData") #Esurv48NECcompDec - No ECx comparison was possible
+```
+
+Embryonic survival 96h
+```{r}
+load("2017.12_data.E.surv96.PAR.raw.RData") #data.E.surv96.PAR.raw
+load("2017.12_data.E.surv96.UV.raw.RData") #data.E.surv96.UV.raw
+load("pred.E.surv96.PAR_pois.RData") #pred.E.surv96.PAR
+load("2017.12_pred.E.surv96.UV_pois.Rdata") #pred.E.surv96.UV
+load("2017.12_Esurv96modfitplot_pois.RData") #Esurv96ModfitplotDec
+load("2017.12_Esurv96LC50comp_pois.RData") #Esurv96LC50compDec
+```
+
+
+Embryonic survival 192h
+```{r}
+load("2017.12_data.E.surv192.PAR.raw_pois.RData") #data.E.surv192.PAR.raw
+load("2017.12_data.E.surv192.UV.raw_pois.RData") #data.E.surv192.UV.raw
+load("2017.12_pred.E.surv192.PAR_pois.Rdata") #pred.E.surv192.PAR
+load("2017.12_pred.E.surv192.UV_pois.RData") #pred.E.surv192.UV
+load("2017.12_Esurv192modfitplot_pois.RData") #Esurv192ModfitplotDec
+load("2017.12_Esurv192LC50comp_pois.RData") #Esurv192LC50compDec
+```
+
+
+
+###Create layout
+
+###Create layout
+```{r}
+layout.main.2 <- ggarrange(Esurv48ModfitplotDec, Esurv48NECcompDec, Esurv96ModfitplotDec, Esurv96LC50compDec, Esurv192ModfitplotDec, Esurv192LC50compDec,
+          ncol = 2, nrow = 3,
+          widths = c(0.5, 0.5))
+layout.main.2
+```
+
+###Export
+
+```{r}
+pdf("Main_fig_2.pdf", width = 6.69, height = 7.38) #height and width in inches
+layout.main.2
+dev.off()
+```
+
+
+
+## Figure 3 - Larval survival & metamorphosis
+
+###Load graphics
+#### Larval survival
+```{r}
+load("2017.12_data.L.surv.PAR.raw.RData")
+load("2017.12_data.L.surv.UV.raw.RData")
+load("2017.12_pred.L.surv.PAR.RData")
+load("2017.12_pred.L.surv.UV.RData")
+load("2017.12_Lsurvmodfitplot.RData") #LsurvModfitplotDec
+load("2017.12_LsurvLC50comp.RData") #LsurvLC50compDec
+```
+
+#### Larval metamorphosis (Dec 2017)
+```{r}
+load("2017.12_data.L.meta.PAR.raw.RData")
+load("2017.12_data.L.meta.UV.raw.RData")
+load("2017.12_pred.L.meta.PAR.RData")
+load("2017.12_pred.L.meta.UV.RData")
+load("2017.12_Lmetamodfitplot.RData") #LmetaModfitplotDec
+load("2017.12_LmetaEC50comp.RData") #LmetaEC50compDec
+```
+
+
+### Create layout
+```{r}
+layout.main.3 <- ggarrange(LsurvModfitplotDec, LsurvLC50compDec, LmetaModfitplotDec, LmetaEC50compDec, 
+          ncol = 2, nrow = 2,
+          widths = c(0.5, 0.5))
+layout.main.3
+```
+
+### Export
+```{r}
+pdf("Main_fig_3.pdf", width = 6.69, height = 4.87) #height and width in inches
+layout.main.3
+dev.off()
+```
+
+
+
+
+##Figure 4 - Larval fragmentation and delta scatter plots
+
+###Load graphics
+#### Larval fragmentation (Dec 2017)
+```{r}
+load("2017.12_L.frag48.PAR_data.raw.RData") #data.L.frag48.PAR.raw
+load("2017.12_L.frag48.UV_data.raw.RData") #data.L.frag48.UV.raw
+load("2017.12_L.frag48.PAR_predvals.RData") #pred.L.frag48.PAR.inv
+load("2017.12_L.frag48.UV_predvals.RData") #pred.L.frag48.UV.inv
+load("2017.12_Lfrag48modfitplot.RData") #Lfrag48ModfitplotDec
+load("2017.12_Lfrag48LC50comp.RData") #Lfrag48LC50compDec
+```
+
+###Create delta larvae-scatter plots
+
+####48h
+##### Load & process data
+```{r}
+L.frag.48h.Dec.data.raw <- read_csv("Data/2017.12_HFO_larval_frags_48h.csv")
+head(L.frag.48h.Dec.data.raw)
+```
+
+Check what treatment concentrations were used
+```{r}
+unique(L.frag.48h.Dec.data.raw$raw.x)
+```
+
+Add a small value to raw.x values for controls to avoid issues with log-transformations of treatment concentrations
+```{r}
+L.frag.48h.Dec.data.raw <- L.frag.48h.Dec.data.raw %>%
+                            mutate(raw.x=ifelse(raw.x==0, 0.3, L.frag.48h.Dec.data.raw$raw.x))
+head(L.frag.48h.Dec.data.raw)
+```
+
+Add a log.x-variable
+```{r}
+L.frag.48h.Dec.data.raw <- mutate(L.frag.48h.Dec.data.raw, log.x = log10(L.frag.48h.Dec.data.raw$raw.x))
+head(L.frag.48h.Dec.data.raw)
+```
+
+Filter according to light treatment
+```{r}
+L.frag.48h.Dec.data.PAR <- filter(L.frag.48h.Dec.data.raw, factor=="PAR")
+L.frag.48h.Dec.data.UV <- filter(L.frag.48h.Dec.data.raw, factor=="UV")
+```
+
+Filter according to whether data should be included in plot or not
+```{r}
+L.frag.48h.Dec.data.PAR <- filter(L.frag.48h.Dec.data.PAR, Use_in_plot=="Yes")
+L.frag.48h.Dec.data.UV <- filter(L.frag.48h.Dec.data.UV, Use_in_plot=="Yes")
+```
+
+##### Plot
+```{r}
+p0= ggplot()
+p0= p0+ scale_color_manual(values = c("PAR" = "seagreen", "UV" = "steelblue")) + theme_light()
+p0= p0+ geom_hline(yintercept=0, linetype="dotted")
+#Add December 2017 48 h data
+p0= p0+ geom_point(data = L.frag.48h.Dec.data.PAR, aes(x = raw.x, y = change_comp_to_t0h, colour=factor(factor), shape = factor(year), alpha = 0.2), size = 2, position=position_jitter(width = .05, height=0.2))
+p0= p0+ geom_point(data = L.frag.48h.Dec.data.UV, aes(x = raw.x, y = change_comp_to_t0h, colour=factor(factor), shape = factor(year), alpha = 0.2), size = 2, position=position_jitter(width = .05, height=0.2))
+#Adjust axes, labeling etc
+p0 = p0+ labs(x=expression(Concentration~(μg~TAH~"L"^{-1})),
+              y=expression(Delta~alive~larvae~"(0-48 h)"),
+              subtitle = "c)") #~0~to~48~h
+p0= p0+ scale_y_continuous( limits = c(-10.05, 6.2), breaks = c(-10, -8, -6, -4, -2, 0, 2, 4, 6), labels = c(-10, -8, -6, -4, -2, 0, 2, 4, 6)) 
+p0= p0+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.border = element_blank(), axis.line = element_line(colour = "grey80"))
+p0= p0+ scale_fill_manual(values = c("seagreen", "steelblue"))
+p0= p0+ theme(legend.position="none")
+# p0 = p0  + theme(legend.position = c(0.9, 0.9))
+p0= p0+ scale_x_continuous(limits = c(0.26, 1003), trans="log10", breaks = c(0.3, 1, 10, 100, 1000), labels = c(0, 1, 10, 100, 1000))
+p0= p0+ annotate("text", label = expression(Replicates~with~increase), x = 2, y = 6.2, size = 2.8, colour = "grey20") 
+p0= p0+ annotate("text", label = "Dec 2017: 3 (4 larvae)", x = 2, y = 5.2, size = 2.4, colour = "grey20")
+p0
+```
+
+Re-name plot
+```{r}
+deltaLsurv48h <- p0
+```
+
+#### 72h
+##### Load & process data
+```{r}
+L.frag.72h.Nov.data.raw <- read_csv("Data/2017.11_HFO_larval_frags_72h.csv")
+L.frag.72h.Dec.data.raw <- read_csv("Data/2017.12_HFO_larval_frags_72h.csv")
+head(L.frag.72h.Nov.data.raw)
+head(L.frag.72h.Dec.data.raw)
+```
+Check what treatment concentrations were used
+```{r}
+unique(L.frag.72h.Nov.data.raw$raw.x)
+unique(L.frag.72h.Dec.data.raw$raw.x)
+```
+
+Add a small value to raw.x values for controls to avoid issues with log-transformations of treatment concentrations
+```{r}
+L.frag.72h.Nov.data.raw <- L.frag.72h.Nov.data.raw %>%
+                            mutate(raw.x=ifelse(raw.x==0, 0.3, L.frag.72h.Nov.data.raw$raw.x))
+head(L.frag.72h.Nov.data.raw)
+L.frag.72h.Dec.data.raw <- L.frag.72h.Dec.data.raw %>%
+                            mutate(raw.x=ifelse(raw.x==0, 0.3, L.frag.72h.Dec.data.raw$raw.x))
+head(L.frag.72h.Dec.data.raw)
+```
+
+Add a log.x-variable
+```{r}
+L.frag.72h.Nov.data.raw <- mutate(L.frag.72h.Nov.data.raw, log.x = log10(L.frag.72h.Nov.data.raw$raw.x))
+head(L.frag.72h.Nov.data.raw)
+L.frag.72h.Dec.data.raw <- mutate(L.frag.72h.Dec.data.raw, log.x = log10(L.frag.72h.Dec.data.raw$raw.x))
+head(L.frag.72h.Dec.data.raw)
+```
+
+Filter according to light treatment
+```{r}
+L.frag.72h.Nov.data.PAR <- filter(L.frag.72h.Nov.data.raw, factor=="PAR")
+L.frag.72h.Nov.data.UV <- filter(L.frag.72h.Nov.data.raw, factor=="UV")
+L.frag.72h.Dec.data.PAR <- filter(L.frag.72h.Dec.data.raw, factor=="PAR")
+L.frag.72h.Dec.data.UV <- filter(L.frag.72h.Dec.data.raw, factor=="UV")
+```
+
+Filter according to whether data should be included in plot or not
+```{r}
+L.frag.72h.Nov.data.PAR <- filter(L.frag.72h.Nov.data.PAR, use_in_plot=="Yes")
+L.frag.72h.Nov.data.UV <- filter(L.frag.72h.Nov.data.UV, use_in_plot=="Yes")
+L.frag.72h.Dec.data.PAR <- filter(L.frag.72h.Dec.data.PAR, use_in_plot=="Yes")
+L.frag.72h.Dec.data.UV <- filter(L.frag.72h.Dec.data.UV, use_in_plot=="Yes")
+```
+
+##### Plot
+```{r}
+p0= ggplot()
+p0= p0+ scale_color_manual(values = c("PAR" = "seagreen", "UV" = "steelblue")) + theme_light()
+p0= p0+ geom_hline(yintercept=0, linetype="dotted")
+#Add November 2017 72h data
+p0= p0+ geom_point(data = L.frag.72h.Nov.data.PAR, aes(x = raw.x, y = change_comp_to_t48h ,colour=factor(factor), shape = factor(year), alpha = 0.2), size = 2, position=position_jitter(width = .05, height=0.2))
+p0= p0+ geom_point(data = L.frag.72h.Nov.data.UV, aes(x = raw.x, y = change_comp_to_t48h, colour=factor(factor), shape = factor(year), alpha = 0.2), size = 2, position=position_jitter(width = .05, height=0.2))
+#Add December 2017  72h data
+p0= p0+ geom_point(data = L.frag.72h.Dec.data.PAR, aes(x = raw.x, y = change_comp_to_t48h, colour=factor(factor), shape = factor(year), alpha = 0.2), size = 2, position=position_jitter(width = .05, height=0.2))
+p0= p0+ geom_point(data = L.frag.72h.Dec.data.UV, aes(x = raw.x, y = change_comp_to_t48h, colour=factor(factor), shape = factor(year), alpha = 0.2), size = 2, position=position_jitter(width = .05, height=0.2))
+#Adjust axes, labeling etc
+p0 = p0+ labs(x=expression(Concentration~(μg~TAH~"L"^{-1})),
+              y=expression(Delta~alive~larvae~"(48-72 h)"),
+              subtitle = "d)") #~48~to~72~h
+p0= p0+ scale_y_continuous( limits = c(-10.05, 6.2), breaks = c(-10, -8, -6, -4, -2, 0, 2, 4, 6), labels = c(-10, -8, -6, -4, -2, 0, 2, 4, 6)) 
+p0= p0+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.border = element_blank(), axis.line = element_line(colour = "grey80"))
+p0= p0+ scale_fill_manual(values = c("seagreen", "steelblue"))
+p0= p0+ theme(legend.position="none")
+# p0 = p0  + theme(legend.position = c(0.9, 0.9))
+p0= p0+ scale_x_continuous(limits = c(0.26, 1003), trans="log10", breaks = c(0.3, 1, 10, 100, 1000), labels = c(0, 1, 10, 100, 1000))
+p0= p0+ annotate("text", label = expression(Replicates~with~increase), x = 2, y = 6.2, size = 2.8, colour = "grey20") 
+p0= p0+ annotate("text", label = "Nov 2017: 15 (25 larvae)", x = 2, y = 5.2, size = 2.4, colour = "grey20")
+p0= p0+ annotate("text", label = "Dec 2017: 18 (30 larvae)", x = 2, y = 4.2, size = 2.4, colour = "grey20")
+p0
+```
+
+Re-name plot
+```{r}
+deltaLsurv72h <- p0
+```
+
+
+
+### Create layout
+```{r}
+layout.main.4 <- ggarrange(Lfrag48ModfitplotDec, Lfrag48LC50compDec, deltaLsurv48h, deltaLsurv72h, 
+          ncol = 2, nrow = 2,
+          widths = c(0.5, 0.5))
+layout.main.4
+```
+
+### Export
+
+```{r}
+pdf("Main_fig_4.pdf", width = 6.69, height = 4.87) #height and width in inches
+layout.main.4
+dev.off()
+```
+
+
+
+
+# Supplementary materials figures
+
+## NEC-MANECs and comparison of posteriors
+
+### Figure S1 - Fertilisation
+
+#### Load graphics
+##### Fertilisation (2018)
+```{r}
+load("2018.11_G.fert.Dark.raw.RData") #data.2018N.G.fert.Dark.raw
+load("2018.11_GfertDarkNEC_predvals.RData") #pred.2018N.G.fert.Dark.NEC
+load("2018.11_GfertNECfitplot.RData") #Nov2018.GfertNECfitplot
+load("2018.11_GfertNECcomp.RData") #Nov2018.GfertNECcomp
+```
+
+##### Fertilisation (Dec 2019)
+```{r}
+load("2019.12_data.G.fert.Dark.raw.RData") #data.2019D.G.fert.Dark.raw
+load("2019.12_data.G.fert.PAR.raw.RData") #data.2019D.G.fert.PAR.raw
+load("2019.12_data.G.fert.UV.raw.RData") #data.2019D.G.fert.UV.raw
+load("2019.12_GfertDarkNEC_predvals.RData") 
+load("2019.12_GfertPARNEC_predvals.RData")
+load("2019.12_GfertUVNEC_predvals.RData")
+load("2019.12_GfertNECfitplot.RData") #Dec2019.GfertNECfitplot
+load("2019.12_GfertNECcomp.RData") #Dec2019.GfertNECcomp
+```
+
+
+
+#### Create combined concentration-response graph
+```{r}
+p0= ggplot()
+p0= p0+ scale_color_manual(values = c("Dark"="slategrey", "PAR"="seagreen", "UV"="steelblue")) + theme_light()
+#Add 95% credible intervals
+p0= p0+  geom_ribbon(aes(x=10^pred.2019D.G.fert.Dark.NEC$x, ymin=pred.2019D.G.fert.Dark.NEC$lw, ymax=pred.2019D.G.fert.Dark.NEC$up, fill="slategrey"),  alpha=0.3)
+p0= p0+  geom_ribbon(aes(x=10^pred.2019D.G.fert.PAR.NEC$x, ymin=pred.2019D.G.fert.PAR.NEC$lw, ymax=pred.2019D.G.fert.PAR.NEC$up, fill="seagreen"),  alpha=0.3)
+p0= p0+  geom_ribbon(aes(x=10^pred.2019D.G.fert.UV.NEC$x, ymin=pred.2019D.G.fert.UV.NEC$lw, ymax=pred.2019D.G.fert.UV.NEC$up,fill="steelblue"),  alpha=0.3)
+p0= p0+  geom_ribbon(aes(x=10^pred.2018N.G.fert.Dark.NEC$x, ymin=pred.2018N.G.fert.Dark.NEC$lw, ymax=pred.2018N.G.fert.Dark.NEC$up, fill="slategrey"),  alpha=0.3)
+#Add model median
+p0= p0+ geom_line(aes(x=10^pred.2019D.G.fert.Dark.NEC$x, y=pred.2019D.G.fert.Dark.NEC$y), color = 'grey30', size=0.5)
+p0= p0+ geom_line(aes(x=10^pred.2019D.G.fert.PAR.NEC$x, y=pred.2019D.G.fert.PAR.NEC$y), color = 'grey30', size=0.5)
+p0= p0+ geom_line(aes(x=10^pred.2019D.G.fert.UV.NEC$x, y=pred.2019D.G.fert.UV.NEC$y), color = 'grey30', size=0.5)
+p0= p0+ geom_line(aes(x=10^pred.2018N.G.fert.Dark.NEC$x, y=pred.2018N.G.fert.Dark.NEC$y), color = 'grey30', size=0.5)
+#Add raw data points
+p0= p0+ geom_point(data = data.2018N.G.fert.Dark.raw, aes(x = raw.x, y = prop ,colour=factor(factor), shape = factor(year), alpha = 0.2), size = data.2018N.G.fert.Dark.raw$tot*0.015, position=position_jitter(width = .025, height=0.02))
+p0= p0+ geom_point(data = data.2019D.G.fert.Dark.raw, aes(x = raw.x, y = prop, colour=factor(factor), shape = factor(year), alpha = 0.2), size = data.2019D.G.fert.Dark.raw$tot*0.015, position=position_jitter(width = .025, height=0.02))
+p0= p0+ geom_point(data = data.2019D.G.fert.PAR.raw, aes(x = raw.x, y = prop, colour=factor(factor), shape = factor(year), alpha = 0.2), size = data.2019D.G.fert.PAR.raw$tot*0.015, position=position_jitter(width = .025, height=0.02))
+p0= p0+ geom_point(data = data.2019D.G.fert.UV.raw, aes(x = raw.x, y = prop, colour=factor(factor), shape = factor(year), alpha = 0.2), size = data.2019D.G.fert.UV.raw$tot*0.02, position=position_jitter(width = .025, height=0.025))
+#Adjust axes, labeling etc
+p0 = p0+ labs(x=expression(Concentration~(μg~TAH~"L"^{-1})),
+              y=expression(Fertilisation~rate~("%")),
+              subtitle = "a)")
+p0= p0+ scale_y_continuous( limits = c(-0.025, 1.03), breaks = c(0, 0.25, 0.5, 0.75, 1.0), labels = c(0, 25, 50, 75, 100)) 
+p0= p0+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.border = element_blank(), axis.line = element_line(colour = "grey80"))
+p0= p0+ scale_fill_manual(values = c("seagreen", "slategrey", "steelblue")) #try changing the order of these around until the right band has the right colour!
+p0= p0+ theme(legend.position="none")
+#p0= p0+ theme(axis.title.x = element_text(colour = "grey20"), axis.title.y = element_text(colour = "grey20"))
+# p0 = p0  + theme(legend.position = c(0.9, 0.9))
+p0= p0+ scale_x_continuous(limits = c(0.018, 1000), trans="log10", breaks = c(0.02, 1, 10, 100, 1000), labels = c(0, 1, 10, 100, 1000))
+p0= p0+ annotate("text", label = "1.2·10^6 sperm ml-1", x = 0.15, y = 1, color = "grey20", size = 2.6)
+p0= p0+ annotate("text", label = "1.5·10^3 sperm ml-1", x = 0.15, y = 0.42, color = "grey20", size = 2.6)
+SpermConcComp.NEC.figure <- p0
+SpermConcComp.NEC.figure
+```
+
+
+#### Create layout
+```{r}
+layout.som.1 <- ggarrange(SpermConcComp.NEC.figure, Dec2019.GfertNECcomp, 
+          ncol = 2, nrow = 1,
+          widths = c(0.5, 0.5))
+layout.som.1
+```
+
+#### Export
+```{r}
+pdf("SOM_fig_1.pdf", width = 6.69, height = 2.78) #height and width in inches
+layout.som.1
+dev.off()
+```
+
+
+
+### Figure S2 - Embryonic survival
+
+#### Load graphics
+##### Embryonic survival 48h
+```{r}
+load("2017.12_data.E.surv48.PAR.raw.RData")
+load("2017.12_data.E.surv48.UV.raw.RData")
+load("2017.12_Efertsurv48PAR_predvalsNEC.RData")
+load("2017.12_Efertsurv48UV_predvals.RData")
+load("2017.12_Esurv48modfitplotNEC.RData") #Esurv48ModfitNECplot
+load("2017.12_Esurv48NECcomp.RData") #Esurv48NECcompDec
+```
+
+##### Embryonic survival 96h
+```{r}
+load("2017.12_data.E.surv96.PAR.raw.RData")
+load("2017.12_data.E.surv96.UV.raw.RData")
+load("pred.E.surv96.PAR.NEC_pois.RData") #pred.E.surv96.PAR.NEC
+load("2017.12_pred.E.surv96.UV.NEC_pois.Rdata") #pred.E.surv96.UV.NEC
+load("2017.12_Esurv96PAR_pois_modfit_NEC.RData")
+load("2017.12_Esurv96UV_pois_modfit_NEC.RData") 
+load("2017.12_Esurv96NECfitplot_pois.RData") #Esurv96NECfitplotDec
+load("2017.12_Esurv96NECcomp_pois.RData") #Esurv96NECcompDec
+```
+
+
+##### Embryonic survival 192h
+```{r}
+load("2017.12_data.E.surv192.PAR.raw_pois.RData") #data.E.surv192.PAR.raw
+load("2017.12_data.E.surv192.UV.raw_pois.RData") #data.E.surv192.UV.raw
+load("2017.12_pred.E.surv192.PAR.NEC_pois.Rdata") #pred.E.surv192.PAR.NEC
+load("2017.12_pred.E.surv192.UV.NEC_pois.RData") #pred.E.surv192.UV.NEC
+load("2017.12_Esurv192NECfitplot_pois.RData") #Esurv192NECfitplotDec
+load("2017.12_Esurv192NECcomp_pois.RData") #Esurv192NECcompDec
+```
+
+
+#### Create layout
+```{r}
+layout.som.2 <- ggarrange(Esurv48ModfitplotDec, Esurv48NECcompDec, Esurv96NECfitplotDec, Esurv96NECcompDec, Esurv192NECfitplotDec, Esurv192NECcompDec, 
+          ncol = 2, nrow = 3,
+          widths = c(0.5, 0.5))
+layout.som.2
+```
+
+#### Export
+```{r}
+pdf("SOM_fig_2.pdf", width = 6.69, height = 7.38) #height and width in inches
+layout.som.2
+dev.off()
+```
+
+
+### Figure S3 - Larval survival, metamorphosis and fragmentation
+
+#### Load graphics
+##### Larval survival
+```{r}
+load("2017.12_data.L.surv.PAR.raw.RData")
+load("2017.12_data.L.surv.UV.raw.RData")
+load("2017.12_pred.L.surv.PAR.NEC.RData")
+load("2017.12_pred.L.surv.UV.NEC.RData")
+load("2017.12_LsurvNECfitplot.RData") #LsurvNECfitplotDec
+load("2017.12_LsurvNECcomp.RData") #LsurvNECcompDec
+```
+
+##### Larval metamorphosis (Dec 2017)
+```{r}
+load("2017.12_data.L.meta.PAR.raw.RData")
+load("2017.12_data.L.meta.UV.raw.RData")
+load("2017.12_pred.L.meta.PAR.NEC.RData")
+load("2017.12_pred.L.meta.UV.NEC.RData")
+load("2017.12_LmetaNECfitplot.RData") #LmetaNECfitplotDec
+load("2017.12_LmetaNECcomp.RData") #LmetaNECcompDec
+```
+
+##### Larval fragmentation
+```{r}
+load("2017.12_L.frag48.PAR_data.raw.RData") #data.L.frag48.PAR.raw
+load("2017.12_L.frag48.UV_data.raw.RData") #data.L.frag48.UV.raw
+load("2017.12_L.frag48.PAR.NEC_predvals.RData") #pred.L.frag48.PAR.NEC.inv
+load("2017.12_L.frag48.UV.NEC_predvals.RData") #pred.L.frag48.UV.NEC.inv
+load("2017.12_Lfrag48NECfitplot.RData") #Lfrag48NECfitplotDec
+load("2017.12_Lfrag48NECcomp.RData") #Lfrag48NECcompDec
+```
+
+
+#### Create layout
+```{r}
+layout.som.3 <- ggarrange(LsurvNECfitplotDec, LsurvNECcompDec, Lfrag48NECfitplotDec, Lfrag48NECcompDec, LmetaNECfitplotDec, LmetaNECcompDec, 
+          ncol = 2, nrow = 3,
+          widths = c(0.5, 0.5))
+layout.som.3
+```
+
+#### Export
+```{r}
+pdf("SOM_fig_3.pdf", width = 6.69, height = 7.38) #height and width in inches
+layout.som.3
+dev.off()
+```
+
+
+
+
+## Additional data sets for assessed endpoints
+
+### Figure S4 - 2019 November fertilisation
+#### Load graphics
+##### Fertilisation (Nov 2019)
+```{r}
+load("2019.11_data.GfertDark.raw.RData") #data.2019N.G.fert.Dark.raw
+load("2019.11_data.GfertPAR.raw.RData") #data.2019N.G.fert.PAR.raw
+load("2019.11_data.GfertUV.raw.RData") #data.2019N.G.fert.UV.raw
+load("2019.11_GfertDark_predvals.RData") #pred.2019N.G.fert.Dark
+load("2019.11_GfertPAR_predvals.RData") #pred.2019N.G.fert.PAR
+load("2019.11_GfertUV_predvals.RData") #pred.2019N.G.fert.UV
+load("2019.11_GfertDarkNEC_predvals.RData") #pred.2019N.G.fert.Dark.NEC
+load("2019.11_GfertPARNEC_predvals.RData") #pred.2019N.G.fert.PAR.NEC
+#No NEC subset fitted as it was inappropriate for the data
+load("2019.11_Gfertmodfitplot.RData") #Nov2019.GfertModfitplot
+load("2019.11_GfertEC10comp.RData") #Nov2019.GfertEC10comp
+load("2019.11_GfertNECfitplot.RData") #Nov2019.GfertNECfitplot
+load("2019.11_GfertNECcomp.RData") #Nov2019.GfertNECcomp
+```
+
+
+#### Create layout
+```{r}
+layout.som.extras.fig4 <- ggarrange(Nov2019.GfertModfitplot, Nov2019.GfertEC10comp, Nov2019.GfertNECfitplot, Nov2019.GfertNECcomp,
+          ncol = 2, nrow = 2,
+          widths = c(0.5, 0.5))
+layout.som.extras.fig4
+```
+
+#### Export
+```{r}
+pdf("SOM_extra_fig4.pdf", width = 6.69, height = 4.92) #height and width in inches
+layout.som.extras.fig4
+dev.off()
+```
+
+
+
+### Figure S5 - November 2017 larval metamorphosis
+
+#### Load graphics
+##### Larval metamorphosis (Nov 2017)
+```{r}
+load("2017.11_data.LmetaPAR.raw.RData") #data.L.meta.PAR.raw
+load("2017.11_data.LmetaPAR.raw.RData") #data.L.meta.UV.raw
+load("2017.11_LmetaPAR_predvals.RData") #pred.L.meta.PAR
+load("2017.11_LmetaPARNEC_predvals.RData") #pred.L.meta.PAR.NEC
+load("2017.11_LmetaUV_predvals.RData") #pred.L.meta.UV
+load("2017.11_LmetaUVNEC_predvals.RData") #pred.L.meta.UV.NEC
+load("2017.11_Lmetamodfitplot.RData") #LmetaModfitplotNov
+load("2017.11_LmetaEC50comp.RData") #LmetaEC50compNov
+load("2017.11_LmetaNECfitplot.RData") #LmetaNECfitplotNov
+load("2017.11_LmetaNECcomp.RData") #LmetaNECcompNov
+```
+
+### Create layout
+```{r}
+layout.som.extras.fig5 <- ggarrange(LmetaModfitplotNov, LmetaEC50compNov, LmetaNECfitplotNov, LmetaNECcompNov,
+          ncol = 2, nrow = 2,
+          widths = c(0.5, 0.5))
+layout.som.extras.fig5
+```
+
+### Export
+```{r}
+pdf("SOM_extra_fig5.pdf", width = 6.69, height = 4.87) #height and width in inches, 9.84 is full A4 page height
+layout.som.extras.fig5
+dev.off()
+```
+
+
+### Figure S5 - November 2017 larval fragmentation
+
+#### Larval fragmentation (Nov 2017)
+```{r}
+load("2017.11_L.frag48.PAR_data.raw.RData") #data.L.frag48.PAR.raw
+load("2017.11_L.frag48.UV_data.raw.RData") #data.L.frag48.UV.raw
+load("2017.11_L.frag48.PAR_predvals.RData") #pred.L.frag48.PAR.inv
+load("2017.11_L.frag48.UV_predvals.RData") #pred.L.frag48.UV.inv
+load("2017.11_Lfrag48modfitplot.RData") #Lfrag48ModfitplotNov
+load("2017.11_Lfrag48LC50comp.RData") #Lfrag48LC50compNov
+load("2017.11_L.frag48.PAR.NEC_predvals.RData") #pred.L.frag48.PAR.NEC.inv
+load("2017.11_L.frag48.UV.NEC_predvals.RData") #pred.L.frag48.UV.NEC.inv
+load("2017.11_Lfrag48NECfitplot.RData") #Lfrag48NECfitplotNov
+load("2017.11_Lfrag48NECcomp.RData") #Lfrag48NECcompNov
+```
+
+
+### Create layout
+```{r}
+layout.som.extras.fig6 <- ggarrange(Lfrag48ModfitplotNov, Lfrag48LC50compNov, Lfrag48NECfitplotNov, Lfrag48NECcompNov,
+          ncol = 2, nrow = 2,
+          widths = c(0.5, 0.5))
+layout.som.extras.fig6
+```
+
+### Export
+```{r}
+pdf("SOM_extra_fig6.pdf", width = 6.69, height = 4.87) #height and width in inches, 9.84 is full A4 page height
+layout.som.extras.fig6
+dev.off()
+```

@@ -1,0 +1,753 @@
+---
+title: "2017.12 Larval survival PAR"
+author: "Mikaela Nordborg"
+date: "12/08/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Background
+Analysis of data sets from A. millepora larval experiments performed in November and December 2017 to test the effects of heavy fuel oil WAF in the presence and absence of ultraviolet radiation (+UV vs -UV). All analysis performed in (at least) four steps:
+    - Model fitting, evaluation and interpretation of -UV/PAR only treatment data
+    - Model fitting, evaluation and interpretation of +UV treatment data
+    - Extraction of no effect concentration (NEC), 10 and 50% effect or lethal concentrations (EC/LCx) and associated 95% credible intervals.
+    - Comparison of posterior distributions of extracted NEC and 50% threshold concentrations for each light treatment (+/-UV).
+
+Compromised or invalid replicates identified prior to data import into R but removal is performed after import. Please see methods of main paper and *Table ___*, Supplementary materials for further details. Control treatment (filtered seawater) set as one third of the lowest treatment concentration used in each assays to avoid potential issues with transformations after data import. Treatment concentrations log10 transformed and analysed on log-scale due to the spacing of treatment concentrations and range covered (equal to or larger than 3 orders of magnitude).
+
+
+A majority of the data sets consist of binomial data and the following terms are used throughout:
+    year = year and month experiment was performed
+    endpoint = endpoint assessed
+    factor = light treatment used
+        PAR = -UV/in the absence of UV light
+        UV = +UV/in the presence of UV light
+    raw.x = time averaged, measured treatment concentration in μg TAH L-1
+    log.x = log10-transfomred, time-averaged, treatment concentrations (measured in μg TAH L-1)
+    suc = number of successes in sample (eg number of successfully settled larvae)
+    tot = total number of organisms in sample
+    prop = proportion of successes out of total tries/organisms in the sample
+    use_in_model = Yes/No, used to filter out samples/replicates that should not be used for model fitting
+    reason_for_exclusion = outlines the reason for why a sample/replicate was excluded from model fitting
+    comments = if further information regarding a sample/replicate may be relevant
+
+
+Larval fragmentation data is available for November (48 and 72 h) and December (48 h and 72 h) 2017. Data is modeled as the proportion of normal larvae at 48 h compared to the total number of larvae alive in each sample at end of exposure. After model validation the model median and 95% credible intervals was inverted (1-y) to enable plotting of the increase in fragmented and small larvae with increasing treatment concentration. 
+
+
+Analysis performed by Mikaela Nordborg.
+
+
+## Packages used and installation of latest version of jagsNEC
+
+Analysis performed using package jagsNEC and it's dependencies. The latest version of jagsNEC installed prior to start of analysis (20 July 2020).
+
+```{r}
+#devtools::install_github("AIMS/NEC-estimation")
+library(jagsNEC)
+library(R2jags)
+require(tidyverse)
+library(beepr)
+```
+
+
+
+## Embryonic survival 
+
+### 48h
+
+#### Import data, check data type and perform data preparation if required
+
+Import data
+```{r}
+data.L.frag48.raw <- read_csv("Data/2017.12_HFO_larval_frags_48h.csv")
+str(data.L.frag48.raw)
+head(data.L.frag48.raw)
+```
+
+Initial data wrangling
+```{r}
+data.L.frag48.raw <- as.data.frame(data.L.frag48.raw)
+data.L.frag48.raw$raw.x <- as.numeric(as.character(data.L.frag48.raw$raw.x))
+str(data.L.frag48.raw)
+data.L.frag48.raw$suc <- as.integer(data.L.frag48.raw$suc)
+data.L.frag48.raw$tot <- as.integer(data.L.frag48.raw$tot)
+str(data.L.frag48.raw)
+data.L.frag48.raw$prop <- as.numeric(as.character(data.L.frag48.raw$prop))
+str(data.L.frag48.raw)
+head(data.L.frag48.raw)
+tail(data.L.frag48.raw)
+```
+
+
+Check what treatment concentrations were used 
+```{r}
+unique(data.L.frag48.raw$raw.x)
+```
+
+Add a small value (~1 order of magnitude less than the lowest treatment concentrations used) to raw.x for 0 ug/L replicates (filtered seawater control) to avoid issues with transformations
+```{r}
+data.L.frag48.raw <- data.L.frag48.raw %>%
+                            mutate(raw.x=ifelse(raw.x==0, 0.3, data.L.frag48.raw$raw.x))
+head(data.L.frag48.raw)
+tail(data.L.frag48.raw)
+```
+
+
+Add a log.x variable
+```{r}
+data.L.frag48.raw <- mutate(data.L.frag48.raw, log.x = log10(data.L.frag48.raw$raw.x))
+str(data.L.frag48.raw)
+head(data.L.frag48.raw)
+```
+
+
+Filter according to light treatment
+```{r}
+data.L.frag48.PAR.raw <- filter(data.L.frag48.raw, factor=="PAR")
+save(data.L.frag48.PAR.raw, file = "2017.12_L.frag48.PAR_data.raw.RData")
+data.L.frag48.UV.raw <- filter(data.L.frag48.raw, factor=="UV")
+save(data.L.frag48.UV.raw, file = "2017.12_L.frag48.UV_data.raw.RData")
+```
+
+
+Filter according to whether replicates are to be included when fitting models or not
+```{r}
+data.L.frag48.PAR <- filter(data.L.frag48.PAR.raw, Use_in_model=="Yes")
+data.L.frag48.UV <- filter(data.L.frag48.UV.raw, Use_in_model=="Yes")
+```
+
+
+#### -UV/PAR
+
+
+##### Initial data exploration
+
+Check distribution of response variable and range of treatment concentrations used
+```{r}
+unique(data.L.frag48.PAR$raw.x)
+par(mfrow=c(2,1))
+hist(data.L.frag48.PAR$raw.x)
+hist(data.L.frag48.PAR$suc/data.L.frag48.PAR$tot)
+par(mfrow=c(1,1))
+plot(data.L.frag48.PAR$log.x, data.L.frag48.PAR$prop)
+```
+
+
+###### Fit models
+
+```{r}
+out.L.frag48.PAR.all <- fit.jagsMANEC(data = data.L.frag48.PAR, 
+                        x.var = "log.x", 
+                        y.var = "suc", 
+                        trials.var = "tot",
+                        model.set = "all",
+                        burnin = 10000)
+beep("mario")
+save(out.L.frag48.PAR.all, file = "2017.12_Lfrag48PAR_modfit1.RData")
+load("2017.12_Lfrag48PAR_modfit1.RData")
+```
+
+
+```{r}
+check.chains(out.L.frag48.PAR.all)
+```
+
+Some indications of poor chain mixing or potential autocorrelation observed for all candidate models
+
+
+
+Re-fit using a longer burn-in and higher iterations
+```{r}
+out.L.frag48.PAR.all <- fit.jagsMANEC(data = data.L.frag48.PAR, 
+                        x.var = "log.x", 
+                        y.var = "suc", 
+                        trials.var = "tot",
+                        model.set = "all",
+                        burnin = 20000)
+beep("mario")
+save(out.L.frag48.PAR.all, file = "2017.12_Lfrag48PAR_modfit2.RData")
+load("2017.12_Lfrag48PAR_modfit2.RData")
+```
+
+```{r}
+check.chains(out.L.frag48.PAR.all)
+```
+
+Some indications of poor chain mixing or autocorrelation for:
+    - ECxWeibull2 (beta)
+    - ECx4param (beta)
+    - NEC4param (beta)
+    - NEC3param (beta)
+    
+Evidence of poor chain mixing or autocorrelation observed for:
+    - ECxWeibull1 (beta)
+
+
+Check if model median, credible intervals and NEC estimate are reasonable compared to the raw data
+```{r}
+plot(out.L.frag48.PAR.all, all_models = TRUE, add.NEC = TRUE)
+```
+
+
+```{r}
+plot(out.L.frag48.PAR.all, add.EC10 = FALSE, add.NEC = FALSE)
+```
+
+
+Drop inappropriate models and models with non-convergence
+```{r}
+out.L.frag48.PAR.mod <- modify_jagsMANEC(out.L.frag48.PAR.all, drop.models = "ECxWeibull1")
+```
+
+```{r}
+plot(out.L.frag48.PAR.mod, add.EC10 = FALSE, add.NEC = FALSE)
+```
+
+```{r}
+plot(out.L.frag48.PAR.mod, all_models = TRUE, add.NEC = TRUE)
+```
+
+
+Check for evidence of overdispersion for remaining models
+```{r}
+out.L.frag48.PAR.mod$mod.stats
+```
+
+Evidence of underdispersion for all candidate models. 
+
+
+Rename model output for selected model
+```{r}
+out.L.frag48.PAR <- out.L.frag48.PAR.mod
+```
+
+
+Create model output for NEC subset
+```{r}
+out.L.frag48.PAR.NEC <- out.L.frag48.PAR
+```
+
+
+
+Save the output for the selected model
+```{r}
+save(out.L.frag48.PAR, file = "2017.12_Lfrag48PAR_modfit.RData")
+load("2017.12_Lfrag48PAR_modfit.RData")
+save(out.L.frag48.PAR.NEC, file = "2017.12_Lfrag48PAR_modfit_NEC.RData")
+load("2017.12_Lfrag48PAR_modfit_NEC.RData")
+```
+
+
+
+
+##### Extract results
+
+
+Extract NEC, EC10 and EC50 (with 95% credible intervals) from posterior and backtransform if required
+
+```{r}
+NEC.L.frag48.PAR <- out.L.frag48.PAR.NEC$NEC
+NEC.L.frag48.PAR <- 10^NEC.L.frag48.PAR
+NEC.L.frag48.PAR
+```
+
+
+```{r}
+EC10.L.frag48.PAR <- extract_ECx(out.L.frag48.PAR, ECx.val = 10, type = "absolute")
+EC10.L.frag48.PAR <- 10^EC10.L.frag48.PAR
+EC10.L.frag48.PAR
+```
+
+
+```{r}
+EC50.L.frag48.PAR <- extract_ECx(out.L.frag48.PAR, ECx.val = 50, type = "absolute")
+EC50.L.frag48.PAR <- 10^EC50.L.frag48.PAR
+EC50.L.frag48.PAR
+```
+
+
+
+
+
+Extract complete posteriors for use in plotting and model comparison
+```{r}
+pred.L.frag48.PAR <- out.L.frag48.PAR$pred.vals
+str(pred.L.frag48.PAR)
+```
+
+Invert model median and credible intervals
+```{r}
+pred.L.frag48.PAR.inv <- as.data.frame(pred.L.frag48.PAR)
+head(pred.L.frag48.PAR.inv)
+pred.L.frag48.PAR.inv <- mutate(pred.L.frag48.PAR.inv, y = 1-(pred.L.frag48.PAR.inv$y))
+pred.L.frag48.PAR.inv <- mutate(pred.L.frag48.PAR.inv, up = 1-(pred.L.frag48.PAR.inv$up))
+pred.L.frag48.PAR.inv <- mutate(pred.L.frag48.PAR.inv, lw = 1-(pred.L.frag48.PAR.inv$lw))
+head(pred.L.frag48.PAR.inv)
+```
+
+Save predicted values
+```{r}
+save(pred.L.frag48.PAR.inv, file = "2017.12_L.frag48.PAR_predvals.RData")
+```
+
+
+Extract complete posteriors for use in plotting and model comparison
+```{r}
+pred.L.frag48.PAR.NEC <- out.L.frag48.PAR.NEC$pred.vals
+str(pred.L.frag48.PAR.NEC)
+```
+
+Invert model median and credible intervals
+```{r}
+pred.L.frag48.PAR.NEC.inv <- as.data.frame(pred.L.frag48.PAR)
+head(pred.L.frag48.PAR.NEC.inv)
+pred.L.frag48.PAR.NEC.inv <- mutate(pred.L.frag48.PAR.NEC.inv, y = 1-(pred.L.frag48.PAR.NEC.inv$y))
+pred.L.frag48.PAR.NEC.inv <- mutate(pred.L.frag48.PAR.NEC.inv, up = 1-(pred.L.frag48.PAR.NEC.inv$up))
+pred.L.frag48.PAR.NEC.inv <- mutate(pred.L.frag48.PAR.NEC.inv, lw = 1-(pred.L.frag48.PAR.NEC.inv$lw))
+head(pred.L.frag48.PAR.NEC.inv)
+```
+
+Save predicted values
+```{r}
+save(pred.L.frag48.PAR.NEC.inv, file = "2017.12_L.frag48.PAR.NEC_predvals.RData")
+```
+
+
+#### +UV/UV
+
+
+##### Initial data exploration
+
+Check distribution of response variable and range of treatment concentrations used
+```{r}
+unique(data.L.frag48.UV$raw.x)
+par(mfrow=c(2,1))
+hist(data.L.frag48.UV$raw.x)
+hist(data.L.frag48.UV$suc/data.L.frag48.UV$tot)
+par(mfrow=c(1,1))
+plot(data.L.frag48.UV$log.x, data.L.frag48.UV$prop)
+```
+
+
+
+##### Fit models
+
+Fit a model-averaged NEC model
+```{r}
+out.L.frag48.UV.all <- fit.jagsMANEC(data = data.L.frag48.UV, 
+                        x.var = "log.x", 
+                        y.var = "suc", 
+                        trials.var = "tot",
+                        model.set = "all",
+                        burnin = 10000)
+save(out.L.frag48.UV.all, file = "2017.12_Lfrag48UV_modfits1.RData")
+load("2017.12_Lfrag48UV_modfits1.RData")
+beep("mario")
+```
+
+
+Check chain mixing and aurocorrelation for each model fit
+```{r}
+check.chains(out.L.frag48.UV.all)
+```
+
+Minor indications of poor chain mixing and autocorrelation observed for several of the models fitted. 
+
+
+
+
+Re-fit with higher burn-in and iterations
+```{r}
+out.L.frag48.UV.all <- fit.jagsMANEC(data = data.L.frag48.UV, 
+                        x.var = "log.x", 
+                        y.var = "suc", 
+                        trials.var = "tot",
+                        model.set = "all",
+                        burnin = 20000)
+save(out.L.frag48.UV.all, file = "2017.12_Lfrag48UV_modfits2.RData")
+load("2017.12_Lfrag48UV_modfits2.RData")
+beep("mario")
+```
+
+```{r}
+check.chains(out.L.frag48.UV.all)
+```
+
+Minor indications of poor chain mixing or autocorrelation observed for:
+    - ECxWeibull2 (beta & SS)
+    - ECxWeibull1 (beta)
+    - ECx4param (beta)
+    - NECsigmoidal (SSsim)
+    - NEC4param (beta)
+    - NEC3param (SS)
+
+
+```{r}
+plot(out.L.frag48.UV.all, add.EC10 = TRUE, add.NEC = FALSE)
+```
+
+
+
+Check if model median, credible intervals and NEC estimates are reasonable compared to the raw data
+```{r}
+plot(out.L.frag48.UV.all, all_models = TRUE, add.NEC = TRUE)
+```
+
+
+Remove models where chains did not converge or that do not make sense graphically
+```{r}
+out.L.frag48.UV.mod <- modify_jagsMANEC(out.L.frag48.UV.all, drop.models = c("NECsigmoidal", "ECx4param"))
+```
+```{r}
+plot(out.L.frag48.UV.mod, all_models = TRUE, add.NEC = TRUE)
+```
+
+```{r}
+plot(out.L.frag48.UV.mod, add.NEC = TRUE, add.EC10 = TRUE)
+```
+
+
+
+Check for evidence of overdispersion
+```{r}
+out.L.frag48.UV.mod$mod.stats
+```
+
+Evidence of overdispersion for NEC3param, all other candidate mdoels underdispersed. 
+
+
+
+Rename model output for selected model
+```{r}
+out.L.frag48.UV <- out.L.frag48.UV.mod
+```
+
+
+Create model output for the NEC model-subset
+```{r}
+out.L.frag48.UV.NEC <- modify_jagsMANEC(out.L.frag48.UV, drop.models = c("ECxWeibull1", "ECxWeibull2"))
+```
+
+
+
+Save the output for the selected model
+```{r}
+save(out.L.frag48.UV, file = "2017.12_Lfrag48UV_modfit.RData")
+load("2017.12_Lfrag48UV_modfit.RData")
+```
+
+
+```{r}
+save(out.L.frag48.UV.NEC, file = "2017.12_Lfrag48UV_modfit_NEC.RData")
+load("2017.12_Lfrag48UV_modfit_NEC.RData")
+```
+
+
+
+##### Extract results
+
+Extract NEC, LC10 and LC50 (with 95% credible intervals) from posterior and backtransform if required
+
+
+```{r}
+NEC.L.frag48.UV <- out.L.frag48.UV$NEC
+NEC.L.frag48.UV <- 10^NEC.L.frag48.UV
+NEC.L.frag48.UV
+```
+
+
+```{r}
+EC10.L.frag48.UV <- extract_ECx(out.L.frag48.UV, ECx.val = 10, type = "absolute")
+EC10.L.frag48.UV <- 10^EC10.L.frag48.UV
+EC10.L.frag48.UV
+```
+
+
+```{r}
+EC50.L.frag48.UV <- extract_ECx(out.L.frag48.UV, ECx.val = 50, type = "absolute")
+EC50.L.frag48.UV <- 10^EC50.L.frag48.UV
+EC50.L.frag48.UV
+```
+
+
+
+Extract complete posteriors for use in plotting and model comparison
+```{r}
+pred.L.frag48.UV <- out.L.frag48.UV$pred.vals
+str(pred.L.frag48.UV)
+```
+
+Invert model median and credible intervals
+```{r}
+pred.L.frag48.UV.inv <- as.data.frame(pred.L.frag48.UV)
+head(pred.L.frag48.UV.inv)
+pred.L.frag48.UV.inv <- mutate(pred.L.frag48.UV.inv, y = 1-(pred.L.frag48.UV.inv$y))
+pred.L.frag48.UV.inv <- mutate(pred.L.frag48.UV.inv, up = 1-(pred.L.frag48.UV.inv$up))
+pred.L.frag48.UV.inv <- mutate(pred.L.frag48.UV.inv, lw = 1-(pred.L.frag48.UV.inv$lw))
+head(pred.L.frag48.UV.inv)
+```
+Save predicted values
+```{r}
+save(pred.L.frag48.UV.inv, file = "2017.12_L.frag48.UV_predvals.RData")
+```
+
+
+Extract complete posteriors for use in plotting and model comparison
+```{r}
+pred.L.frag48.UV.NEC <- out.L.frag48.UV.NEC$pred.vals
+str(pred.L.frag48.UV.NEC)
+```
+Invert model median and credible intervals
+```{r}
+pred.L.frag48.UV.NEC.inv <- as.data.frame(pred.L.frag48.UV)
+head(pred.L.frag48.UV.NEC.inv)
+pred.L.frag48.UV.NEC.inv <- mutate(pred.L.frag48.UV.NEC.inv, y = 1-(pred.L.frag48.UV.NEC.inv$y))
+pred.L.frag48.UV.NEC.inv <- mutate(pred.L.frag48.UV.NEC.inv, up = 1-(pred.L.frag48.UV.NEC.inv$up))
+pred.L.frag48.UV.NEC.inv <- mutate(pred.L.frag48.UV.NEC.inv, lw = 1-(pred.L.frag48.UV.NEC.inv$lw))
+head(pred.L.frag48.UV.NEC.inv)
+```
+
+Save predicted values
+```{r}
+save(pred.L.frag48.UV.NEC.inv, file = "2017.12_L.frag48.UV.NEC_predvals.RData")
+```
+
+
+
+#### PLot results
+
+```{r}
+library(ggplot2)
+library(scales)
+```
+
+
+
+##### Combined "all models subset" plot
+
+```{r}
+p0= ggplot()
+p0= p0+ scale_color_manual(values = c("UV" = "steelblue", "PAR" = "seagreen")) + theme_light()
+#Add 95% credible intervals
+p0= p0+  geom_ribbon(aes(x=10^pred.L.frag48.PAR.inv$x, ymin=pred.L.frag48.PAR.inv$lw, ymax=pred.L.frag48.PAR.inv$up, fill="seagreen"),  alpha=0.3) #Seagreen HEX code: #2e8b57
+p0= p0+  geom_ribbon(aes(x=10^pred.L.frag48.UV.inv$x, ymin=pred.L.frag48.UV.inv$lw, ymax=pred.L.frag48.UV.inv$up,fill="steelblue",  alpha=0.3))
+#Add model median
+p0= p0+ geom_line(aes(x=10^pred.L.frag48.PAR.inv$x, y=pred.L.frag48.PAR.inv$y), color = 'grey30', size=0.5)
+p0= p0+ geom_line(aes(x=10^pred.L.frag48.UV.inv$x, y=pred.L.frag48.UV.inv$y), color = 'grey30', size=0.5)
+#Add raw data points
+p0= p0+ geom_point(data = data.L.frag48.PAR.raw, aes(x = raw.x, y = prop, colour=factor(factor), alpha = 0.3), size = data.L.frag48.PAR.raw$tot*0.2, position=position_jitter(width = .025, height=0.03))
+p0= p0+ geom_point(data = data.L.frag48.UV.raw, aes(x = raw.x, y = prop, colour=factor(factor), alpha = 0.3), size = data.L.frag48.UV.raw$tot*0.2, position=position_jitter(width = .025, height=0.03))
+#Adjust labels, axes, etc
+p0 = p0+ labs(x=expression(Concentration~(μg~TAH~"L"^{-1})),
+              y=expression(Small~or~fragmented~larvae~("%")),
+              subtitle="a)")
+p0= p0+ scale_y_continuous( limits = c(-0.012, 1.05), breaks = c(0, 0.25, 0.5, 0.75, 1.0), labels = c(0, 25, 50, 75, 100)) 
+p0= p0+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.border = element_blank(), axis.line = element_line(colour = "grey80"))
+p0= p0+ scale_fill_manual(values = c("seagreen", "steelblue"))
+p0= p0+ theme(legend.position="none")
+p0= p0+ scale_x_continuous(limits = c(0.28, 1000), trans="log10", breaks = c(0.3, 1, 10, 100, 1000), labels = c(0, 1, 10, 100, 1000))
+# p0 = p0  + theme(legend.position = c(0.9, 0.9))
+#p0= p0+ facet_wrap(~factor, nrow = 1)
+p0
+```
+
+```{r}
+Lfrag48ModfitplotDec <- p0
+save(Lfrag48ModfitplotDec, file = "2017.12_Lfrag48modfitplot.RData")
+```
+
+
+
+##### Combined "NEC subset" plot
+
+```{r}
+p0= ggplot()
+p0= p0+ scale_color_manual(values = c("UV" = "steelblue", "PAR" = "seagreen")) + theme_light()
+#Add 95% credible intervals
+p0= p0+  geom_ribbon(aes(x=10^pred.L.frag48.PAR.NEC.inv$x, ymin=pred.L.frag48.PAR.NEC.inv$lw, ymax=pred.L.frag48.PAR.NEC.inv$up, fill="seagreen"),  alpha=0.3) #Seagreen HEX 
+p0= p0+  geom_ribbon(aes(x=10^pred.L.frag48.UV.NEC.inv$x, ymin=pred.L.frag48.UV.NEC.inv$lw, ymax=pred.L.frag48.UV.NEC.inv$up,fill="steelblue",  alpha=0.3))
+#Add model median
+p0= p0+ geom_line(aes(x=10^pred.L.frag48.PAR.NEC.inv$x, y=pred.L.frag48.PAR.NEC.inv$y), color = 'grey30', size=0.5)
+p0= p0+ geom_line(aes(x=10^pred.L.frag48.UV.NEC.inv$x, y=pred.L.frag48.UV.NEC.inv$y), color = 'grey30', size=0.5)
+#Add raw data points
+p0= p0+ geom_point(data = data.L.frag48.PAR.raw, aes(x = raw.x, y = prop, colour=factor(factor), alpha = 0.3), size = data.L.frag48.PAR.raw$tot*0.2, position=position_jitter(width = .025, height=0.03))
+p0= p0+ geom_point(data = data.L.frag48.UV.raw, aes(x = raw.x, y = prop, colour=factor(factor), alpha = 0.3), size = data.L.frag48.UV.raw$tot*0.2, position=position_jitter(width = .025, height=0.03))
+#Adjust labels, axes, etc
+p0 = p0+ labs(x=expression(Concentration~(μg~TAH~"L"^{-1})),
+              y=expression(Small~or~fragmented~larvae~("%")),
+              subtitle="e)")
+p0= p0+ scale_y_continuous( limits = c(-0.013, 1.05), breaks = c(0, 0.25, 0.5, 0.75, 1.0), labels = c(0, 25, 50, 75, 100)) 
+p0= p0+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.border = element_blank(), axis.line = element_line(colour = "grey80"))
+p0= p0+ scale_fill_manual(values = c("seagreen", "steelblue"))
+p0= p0+ theme(legend.position="none")
+p0= p0+ scale_x_continuous(limits = c(0.28, 1000), trans="log10", breaks = c(0.3, 1, 10, 100, 1000), labels = c(0, 1, 10, 100, 1000))
+# p0 = p0  + theme(legend.position = c(0.9, 0.9))
+#p0= p0+ facet_wrap(~factor, nrow = 1)
+p0
+```
+
+
+Rename and save plot
+```{r}
+Lfrag48NECfitplotDec <- p0
+save(Lfrag48NECfitplotDec, file = "2017.12_Lfrag48NECfitplot.RData")
+```
+
+
+
+#### Compare +/-UV posteriors
+
+Ensure dependency packages are loaded
+```{r}
+library(dplyr)
+library(tidybayes)
+library(jagsNEC) #for manual function use
+library(R2jags) #for manual function use
+library(ggplot2)
+```
+
+
+##### NEC
+
+Perform comparison of posterior distributions for survival NEC
+```{r}
+comp.L.frag48.NEC <- compare_posterior(out.L.frag48.PAR, out.L.frag48.UV, comparison = "NEC") #1st model=blue, 2nd model=orange; #place PAR model first and UV model second for colour matching in custom plots
+comp.L.frag48.NEC
+```
+
+For custom plotting of survival NEC comparison
+```{r}
+p1 = ggplot(comp.L.frag48.NEC$df3.s, aes(x=PS))+geom_density(aes(group=curve, color =curve , fill=curve), alpha=0.4) #df3.s is an object returned by compare_posterior()
+p1 = p1 + stat_pointinterval(aes(y = 0.00, x = PS, group=curve),.width = c(.66, .95), size=0.5)+
+  theme_light()
+p1 = p1+scale_fill_manual(values = c("seagreen", "steelblue"))+
+  scale_color_manual(values = c("grey","grey", "steelblue1","steelblue", "grey","grey", "grey","grey"))+theme(legend.position="none")
+p1 = p1 + scale_y_continuous(limits = c(-0.5, 40), breaks = c(0, 10, 20, 30, 40), labels = c(0, 10, 20, 30, 40), name ="Posterior probability density") 
+p1 = p1 + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.border = element_blank(), axis.line = element_line(colour = "grey80"))
+p1 = p1 + scale_x_continuous(limits = c(-0.6, 3.3), breaks = c(0, 1, 2, 3), labels = c(1, 10, 100, 1000))
+p1 = p1 + labs(x=expression(Threshold~concentration~(μg~TAH~"L"^{-1})),
+               subtitle = "f)") #~NEC~comparison
+p1= p1+ annotate("text", label = expression(Probability~of~NEC~difference), x = 0.55, y = 34, size = 2.8, colour = "grey20") #0.85 of the max y-axis limit
+p1= p1+ annotate("text", label = "UV < PAR = 95%", x = 0.55, y = 30.8, size = 2.4, colour = "grey20") #0.906 of the first annotations y-value
+p1
+```
+
+Rename and save plot
+```{r}
+Lfrag48NECcompDec <- p1
+save(Lfrag48NECcompDec, file = "2017.12_Lfrag48NECcomp.RData")
+```
+
+
+
+For custom plotting of NEC differences posterior density
+```{r}
+p2 = ggplot(comp.L.frag48.NEC$df4.s, aes(x=comp.L.frag48.NEC$df4.s$diff))+geom_density(aes(x=comp.L.frag48.NEC$df4.s$diff, fill = 'grey'), alpha=0.4)+ #df4.s is an object returned by compare_posterior()
+  stat_pointinterval(aes(y = 0.00, x = comp.L.frag48.NEC$df4.s$diff),.width = c(.66, .95))+
+   geom_vline(xintercept = 0, color = "red", lty = 2)+ theme_light()
+p2 = p2+scale_fill_manual( values = c("grey", "grey"))+
+  scale_color_manual( values = c("grey","grey", "steelblue1","steelblue4", "grey","grey", "grey","grey"))+theme(legend.position="none")
+p2 = p2 + scale_y_continuous(name ="Differences posterior density") 
+p2 = p2 + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.border = element_blank(), axis.line = element_line(colour = "grey80"))
+p2 = p2 + scale_x_continuous(name ="Standardized effect size") 
+p2
+#save(p2, file = "2017.12_LsurvNECdiff.RData")
+```
+
+
+
+
+##### EC50
+
+
+Perform comparison of posterior distributions for survival LC50
+```{r}
+comp.L.frag48.LC50 <- compare_posterior(out.L.frag48.PAR, out.L.frag48.UV, comparison="ECx", ECx.val = 50) #place PAR model first and UV model second for colour matching in custom plots
+comp.L.frag48.LC50
+```
+
+
+For custom plotting of EC50 comparison
+```{r}
+p1 = ggplot(comp.L.frag48.LC50$df3.s, aes(x=PS))+geom_density(aes(group=curve, color =curve , fill=curve), alpha=0.4) #df3.s is an object returned by compare_posterior()
+p1 = p1 + stat_pointinterval(aes(y = 0.00, x = PS, group=curve),.width = c(.66, .95), size=0.5)+
+  theme_light()
+p1 = p1+scale_fill_manual(values = c("seagreen", "steelblue"))+
+  scale_color_manual(values = c("grey","grey", "steelblue1","steelblue", "grey","grey", "grey","grey"))+theme(legend.position="none")
+p1 = p1 + scale_y_continuous(limits = c(-0.5, 44), breaks = c(0, 10, 20, 30, 40), labels = c(0, 10, 20, 30, 40), name ="Posterior probability density") 
+p1 = p1 + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.border = element_blank(), axis.line = element_line(colour = "grey80"))
+p1 = p1 + scale_x_continuous(limits = c(-0.6, 3.3), breaks = c(0, 1, 2, 3), labels = c(1, 10, 100, 1000)) 
+p1 = p1 + labs(x=expression(Threshold~concentration~(μg~TAH~"L"^{-1})),
+               subtitle = "b)") #~EC[50]~comparison
+p1= p1+ annotate("text", label = expression(Probability~of~EC[50]~difference), x = 0.55, y = 37.4, size = 2.8, colour = "grey20") #0.85 of the max y-axis limit
+p1= p1+ annotate("text", label = "UV < PAR = 100%", x = 0.55, y = 33.88, size = 2.4, colour = "grey20") #0.906 of the first annotation
+p1
+```
+
+```{r}
+Lfrag48LC50compDec <- p1
+save(Lfrag48LC50compDec, file = "2017.12_Lfrag48LC50comp.RData")
+```
+
+
+
+
+For custom plotting of LC50 differences posterior density
+```{r}
+p2 = ggplot(comp.L.frag48.LC50$df4.s, aes(x=comp.L.frag48.LC50$df4.s$diff))+geom_density(aes(x=comp.L.frag48.LC50$df4.s$diff, fill = 'grey'), alpha=0.4)+ #df4.s is an object returned by compare_posterior()
+  stat_pointinterval(aes(y = 0.00, x = comp.L.frag48.LC50$df4.s$diff),.width = c(.66, .95))+
+   geom_vline(xintercept = 0, color = "red", lty = 2)+ theme_light()
+p2 = p2+scale_fill_manual( values = c("grey", "grey"))+
+  scale_color_manual( values = c("grey","grey", "steelblue1","steelblue4", "grey","grey", "grey","grey"))+theme(legend.position="none")
+p2 = p2 + scale_y_continuous(name ="Differences posterior density") 
+p2 = p2 + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.border = element_blank(), axis.line = element_line(colour = "grey80"))
+p2 = p2 + scale_x_continuous(name ="Standardized effect size") 
+p2
+#save(p2, file = "2017.12_LsurvEC50diff.RData")
+```
+
+
+
+### Create layouts and export
+
+```{r}
+#devtools::install_github("kassambara/ggpubr")
+library(ggpubr)
+```
+
+
+Create layout
+
+Load graphics
+```{r}
+load("2017.12_Lfrag48modfitplot.RData") #Lfrag48ModfitplotDec
+load("2017.12_Lfrag48LC50comp.RData") #Lfrag48LC50compDec
+load("2017.12_Lfrag48NECfitplot.RData") #Lfrag48NECfitplotDec
+load("2017.12_Lfrag48NECcomp.RData") #Lfrag48NECcompDec
+```
+
+
+```{r}
+layout.E.surv <- ggarrange(Lfrag48ModfitplotDec, Lfrag48LC50compDec, Lfrag48NECfitplotDec, Lfrag48NECcompDec,
+          ncol = 2, nrow = 2,
+          widths = c(0.5, 0.5))
+layout.E.surv
+```
+
+
+
+
+Export layout
+```{r}
+pdf("test2.pdf", width = 8.27, height = 4.92) #height and width in inches
+layout.E.surv
+dev.off()
+```
+
+
+

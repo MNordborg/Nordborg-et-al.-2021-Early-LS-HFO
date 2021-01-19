@@ -1,0 +1,785 @@
+---
+title: "2017.12 Larval survival Dark"
+author: "Mikaela Nordborg"
+date: "12/08/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Background
+Analysis of data sets from A. millepora fertilisation rate experiment performed in  December 2017, November 2018 and both November and December 2019 to test the effects of heavy fuel oil WAF in the presence and absence of ultraviolet radiation (+UV vs -UV). All analysis performed in (at least) four steps:
+    - Model fitting, evaluation and interpretation of -UV/Dark only treatment data
+    - Model fitting, evaluation and interpretation of +UV treatment data
+    - Extraction of no effect concentration (NEC), 10 and 50% effect or lethal concentrations (EC/LCx) and associated 95% credible intervals.
+    - ComDarkison of posterior distributions of extracted NEC and 50% threshold concentrations for each light treatment (+/-UV).
+
+Compromised or invalid replicates identified prior to data import into R but removal is performed after import. Please see methods of main paper and *Table ___*, Supplementary materials for further details. Control treatment (filtered seawater) generally set as one third of the lowest treatment concentration used in each assays to avoid potential issues with transformations after data import. Treatment concentrations log10 transformed and analysed on log-scale due to the spacing of treatment concentrations and range covered (equal to or larger than 3 orders of magnitude).
+
+
+A majority of the data sets consist of binomial data and the following terms are used throughout:
+    year = year and month experiment was performed
+    endpoint = endpoint assessed
+    factor = light treatment used
+        Dark = exposure performed in the absence of light
+	      PAR = exposure performed under visible light -UV/in the absence of ultraviolet light
+	      UV = exposure performed under visible light +UV/in the presence of ultraviolet light
+    raw.x = time averaged, measured treatment concentration in μg TAH L-1
+    log.x = log10-transformed, time-averaged, treatment concentrations (measured in μg TAH L-1)
+    suc = number of successes in sample (eg number of successfully settled larvae)
+    tot = total number of organisms in sample
+    prop = proportion of successes out of total tries/organisms in the sample
+    use_in_model = Yes/No, used to filter out samples/replicates that should not be used for model fitting
+    reason_for_exclusion = outlines the reason for why a sample/replicate was excluded from model fitting
+    comments = if further information regarding a sample/replicate may be relevant
+
+Fertilisation rate data available across several spawning events from 2017-2019. Each dataset analysed seDarkately
+
+
+
+
+Analysis performed by Mikaela Nordborg.
+
+
+## Packages used and installation of latest version of jagsNEC
+
+Analysis performed using package jagsNEC and it's dependencies. The latest version of jagsNEC installed prior to start of analysis (20 July 2020).
+
+```{r}
+#devtools::install_github("AIMS/NEC-estimation")
+library(jagsNEC)
+library(R2jags)
+require(tidyverse)
+library(beepr)
+```
+
+
+
+## Fertilisation rate 
+
+### November 2018
+
+#### Import data, check data type and perform data preparation if required
+
+Import data
+```{r}
+data.2018N.G.fert.raw <- read_csv("Data/2018.11_HFO_gamete_fert.csv")
+str(data.2018N.G.fert.raw)
+head(data.2018N.G.fert.raw)
+```
+
+Initial data wrangling
+```{r}
+data.2018N.G.fert.raw <- as.data.frame(data.2018N.G.fert.raw)
+data.2018N.G.fert.raw$raw.x <- as.numeric(as.character(data.2018N.G.fert.raw$raw.x))
+str(data.2018N.G.fert.raw)
+data.2018N.G.fert.raw$suc <- as.integer(data.2018N.G.fert.raw$suc)
+data.2018N.G.fert.raw$tot <- as.integer(data.2018N.G.fert.raw$tot)
+str(data.2018N.G.fert.raw)
+data.2018N.G.fert.raw$prop <- as.numeric(as.character(data.2018N.G.fert.raw$prop))
+str(data.2018N.G.fert.raw)
+head(data.2018N.G.fert.raw)
+tail(data.2018N.G.fert.raw)
+```
+
+
+Check what treatment concentrations were used 
+```{r}
+unique(data.2018N.G.fert.raw$raw.x)
+```
+
+Add a small value (at least ~1 order of magnitude less than the lowest treatment concentrations used) to raw.x for 0 ug/L replicates (filtered seawater control) to avoid issues with transformations
+```{r}
+data.2018N.G.fert.raw <- data.2018N.G.fert.raw %>%
+                            mutate(raw.x=ifelse(raw.x==0, 0.02, data.2018N.G.fert.raw$raw.x))
+head(data.2018N.G.fert.raw)
+tail(data.2018N.G.fert.raw)
+```
+
+
+Add a log.x variable
+```{r}
+data.2018N.G.fert.raw <- mutate(data.2018N.G.fert.raw, log.x = log10(data.2018N.G.fert.raw$raw.x))
+str(data.2018N.G.fert.raw)
+head(data.2018N.G.fert.raw)
+```
+
+
+Filter according to light treatment
+```{r}
+data.2018N.G.fert.Dark.raw <- filter(data.2018N.G.fert.raw, factor=="Dark")
+save(data.2018N.G.fert.Dark.raw, file = "2018.11_G.fert.Dark.raw.RData")
+data.2018N.G.fert.UV.raw <- filter(data.2018N.G.fert.raw, factor=="UV")
+save(data.2018N.G.fert.UV.raw, file = "2018.11_G.fert.UV.raw.RData")
+```
+
+
+Filter according to whether replicates are to be included when fitting models or not
+```{r}
+data.2018N.G.fert.Dark <- filter(data.2018N.G.fert.Dark.raw, use_in_model=="Yes")
+data.2018N.G.fert.UV <- filter(data.2018N.G.fert.UV.raw, use_in_model=="Yes")
+```
+
+
+#### Dark
+
+
+##### Initial data exploration
+
+Check distribution of response variable and range of treatment concentrations used
+```{r}
+unique(data.2018N.G.fert.Dark$raw.x)
+par(mfrow=c(2,1))
+hist(data.2018N.G.fert.Dark$raw.x)
+hist(data.2018N.G.fert.Dark$suc/data.2018N.G.fert.Dark$tot)
+par(mfrow=c(1,1))
+plot(data.2018N.G.fert.Dark$log.x, data.2018N.G.fert.Dark$prop)
+```
+
+
+###### Fit models
+
+```{r}
+out.2018N.G.fert.Dark.all <- fit.jagsMANEC(data = data.2018N.G.fert.Dark, 
+                        x.var = "log.x", 
+                        y.var = "suc", 
+                        trials.var = "tot",
+                        model.set = "all",
+                        burnin = 10000)
+beep("mario")
+save(out.2018N.G.fert.Dark.all, file = "2018.11_GfertDark_modfit1.RData")
+load("2018.11_GfertDark_modfit1.RData")
+```
+
+
+```{r}
+check.chains(out.2018N.G.fert.Dark.all)
+```
+
+Minor indications of poor chain mixing or potential autocorrelation observed for:
+    - ECxsigmoidal (d)
+
+
+Non-convergence observed for:
+    - NECHormesis
+    - NECsigmoidal
+
+
+
+
+Re-fit using a longer burn-in and higher iterations
+```{r}
+out.2018N.G.fert.Dark.all <- fit.jagsMANEC(data = data.2018N.G.fert.Dark, 
+                        x.var = "log.x", 
+                        y.var = "suc", 
+                        trials.var = "tot",
+                        model.set = "all",
+                        burnin = 20000)
+beep("mario")
+save(out.2018N.G.fert.Dark.all, file = "2018.11_GfertDark_modfit2.RData")
+load("2018.11_GfertDark_modfit2.RData")
+```
+
+```{r}
+check.chains(out.2018N.G.fert.Dark.all)
+```
+
+Some indications of poor chain mixing or autocorrelation for:
+    - ECxsigmoidal (d)
+
+    
+Non-convergence observed for:
+    - NECHormesis
+
+
+
+Check if model median, credible intervals and NEC estimate are reasonable compared to the raw data
+```{r}
+plot(out.2018N.G.fert.Dark.all, all_models = TRUE, add.NEC = TRUE)
+```
+Based on graphical evaluation of model fit the following should be excluded:
+    - NECHormesis
+    - NECsigmoidal
+    - ECxLinear
+    - ECxExp
+    - ECxsigmoidal
+    
+
+```{r}
+plot(out.2018N.G.fert.Dark.all, add.EC10 = FALSE, add.NEC = FALSE)
+```
+
+
+Drop inappropriate models and models with non-convergence
+```{r}
+out.2018N.G.fert.Dark.mod <- modify_jagsMANEC(out.2018N.G.fert.Dark.all, drop.models = c("NECHormesis", "NECsigmoidal", "ECxLinear", "ECxExp", "ECxsigmoidal"))
+```
+
+```{r}
+plot(out.2018N.G.fert.Dark.mod, add.EC10 = FALSE, add.NEC = FALSE)
+```
+
+```{r}
+plot(out.2018N.G.fert.Dark.mod, all_models = TRUE, add.NEC = TRUE)
+```
+
+
+Check for evidence of overdispersion for remaining models
+```{r}
+out.2018N.G.fert.Dark.mod$mod.stats
+```
+
+All models had overdispersion parameters = 1.
+
+
+Re-fit MANEC with over.disp = TRUE
+```{r}
+out.2018N.G.fert.Dark.all.od <- fit.jagsMANEC(data = data.2018N.G.fert.Dark, 
+                        x.var = "log.x", 
+                        y.var = "suc", 
+                        trials.var = "tot",
+                        model.set = "all",
+                        burnin = 20000,
+                        over.disp = TRUE)
+beep("mario")
+save(out.2018N.G.fert.Dark.all.od, file = "2018.11_GfertDark_modfit3.RData")
+load("2018.11_GfertDark_modfit3.RData")
+```
+
+```{r}
+check.chains(out.2018N.G.fert.Dark.all.od)
+```
+
+Minor indications of poor chain mixing or autocorrelation observed for:
+    - NEC4param (beta)
+    - ECx4param (beta)
+    - ECxWeibull1 (beta)
+    - ECxWeibull2 (beta)
+
+
+Evidence of por chainmixing or autocorrelation:
+    - NECHormesis
+
+
+Non-convergence observed for:
+    - NECsigmoidal
+    
+  
+Check if model median, credible intervals and NEC estimates are reasonable compared to the raw data
+```{r}
+plot(out.2018N.G.fert.Dark.all.od, all_models = TRUE, add.NEC = TRUE)
+```
+
+Based on graphical evaluation of model fit the following models should be excluded:
+    - NECHormesis
+    - NECsigmoidal
+    - ECxLinear
+    
+    
+Drop poor model fits and models with convergence or autocorrelation issues
+```{r}
+out.2018N.G.fert.Dark.mod.od <- modify_jagsMANEC(out.2018N.G.fert.Dark.all.od, drop.models = c("NECHormesis", "NECsigmoidal", "ECxLinear"))
+```
+
+```{r}
+plot(out.2018N.G.fert.Dark.mod.od, all_models = TRUE, add.NEC = FALSE)
+```
+
+
+```{r}
+plot(out.2018N.G.fert.Dark.mod.od, add.EC10 = FALSE, add.NEC = FALSE)
+```
+
+Compare to MANEC fitted using the binomial distribution
+```{r}
+plot(out.2018N.G.fert.Dark.mod, add.EC10 = FALSE, add.NEC = FALSE)
+```
+
+
+
+
+
+Rename model output for selected model
+```{r}
+out.2018N.G.fert.Dark <- out.2018N.G.fert.Dark.mod.od
+```
+
+
+Create model output for NEC subset
+```{r}
+out.2018N.G.fert.Dark.NEC <- modify_jagsMANEC(out.2018N.G.fert.Dark, drop.models = c("ECx4param", "ECxWeibull1", "ECxWeibull2"))
+```
+
+
+
+Save the output for the selected model
+```{r}
+save(out.2018N.G.fert.Dark, file = "2018.11_GfertDark_modfit.RData")
+load("2018.11_GfertDark_modfit.RData")
+save(out.2018N.G.fert.Dark.NEC, file = "2018.11_GfertDark_modfit_NEC.RData")
+load("2018.11_GfertDark_modfit_NEC.RData")
+```
+
+
+
+
+##### Extract results
+
+
+Extract NEC, EC10 and EC50 (with 95% credible intervals) from posterior and backtransform if required
+
+```{r}
+NEC.2018N.G.fert.Dark <- out.2018N.G.fert.Dark.NEC$NEC
+NEC.2018N.G.fert.Dark <- 10^NEC.2018N.G.fert.Dark
+NEC.2018N.G.fert.Dark
+```
+
+
+```{r}
+EC10.2018N.G.fert.Dark <- extract_ECx(out.2018N.G.fert.Dark, ECx.val = 10, type = "absolute")
+EC10.2018N.G.fert.Dark <- 10^EC10.2018N.G.fert.Dark
+EC10.2018N.G.fert.Dark
+```
+
+```{r}
+EC50.2018N.G.fert.Dark <- extract_ECx(out.2018N.G.fert.Dark, ECx.val = 50, type = "absolute")
+EC50.2018N.G.fert.Dark <- 10^EC50.2018N.G.fert.Dark
+EC50.2018N.G.fert.Dark
+```
+
+
+
+
+
+Extract complete posteriors for use in plotting and comparisons between light treatments
+```{r}
+pred.2018N.G.fert.Dark <- out.2018N.G.fert.Dark$pred.vals
+str(pred.2018N.G.fert.Dark)
+save(pred.2018N.G.fert.Dark, file = "2018.11_GfertDark_predvals.RData")
+load("2018.11_GfertDark_predvals.RData")
+```
+
+```{r}
+pred.2018N.G.fert.Dark.NEC <- out.2018N.G.fert.Dark.NEC$pred.vals
+str(pred.2018N.G.fert.Dark.NEC)
+save(pred.2018N.G.fert.Dark.NEC, file = "2018.11_GfertDarkNEC_predvals.RData")
+load("2018.11_GfertDarkNEC_predvals.RData")
+```
+
+
+#### +UV/UV
+
+
+##### Initial data exploration
+
+Check distribution of response variable and range of treatment concentrations used
+```{r}
+unique(data.2018N.G.fert.UV$raw.x)
+par(mfrow=c(2,1))
+hist(data.2018N.G.fert.UV$raw.x)
+hist(data.2018N.G.fert.UV$suc/data.2018N.G.fert.UV$tot)
+par(mfrow=c(1,1))
+plot(data.2018N.G.fert.UV$log.x, data.2018N.G.fert.UV$prop)
+```
+
+
+
+##### Fit models
+
+Fit a model-averaged NEC model
+```{r}
+out.2018N.G.fert.UV.all <- fit.jagsMANEC(data = data.2018N.G.fert.UV, 
+                        x.var = "log.x", 
+                        y.var = "suc", 
+                        trials.var = "tot",
+                        model.set = "all",
+                        burnin = 10000)
+save(out.2018N.G.fert.UV.all, file = "2018.11_GfertUV_modfits1.RData")
+load("2018.11_GfertUV_modfits1.RData")
+beep("mario")
+```
+
+
+Check chain mixing and aurocorrelation for each model fit
+```{r}
+check.chains(out.2018N.G.fert.UV.all)
+```
+
+Evidence of poor chain mixing and autocorrelation observed for several of the models fitted. 
+
+
+
+
+Re-fit with higher burn-in and iterations
+```{r}
+out.2018N.G.fert.UV.all <- fit.jagsMANEC(data = data.2018N.G.fert.UV, 
+                        x.var = "log.x", 
+                        y.var = "suc", 
+                        trials.var = "tot",
+                        model.set = "all",
+                        burnin = 20000)
+save(out.2018N.G.fert.UV.all, file = "2018.11_GfertUV_modfits2.RData")
+load("2018.11_GfertUV_modfits2.RData")
+beep("mario")
+```
+
+```{r}
+check.chains(out.2018N.G.fert.UV.all)
+```
+    
+Evidence of poor chain mixing, autocorrelation or some non-convergence:
+    - ECxWeibull2 (beta, bot & EC50)
+    - ECxWeibull1 (beta, top, bot & EC50)
+    - ECx4param (beta, top, bot & EC50)
+    - NECHormesis (top, beta, NEC & slope)
+    - NEC4param (beta, top & NEC)
+    - NEC3param (top, beta & NEC)
+    
+
+
+```{r}
+plot(out.2018N.G.fert.UV.all, add.EC10 = TRUE, add.NEC = FALSE)
+```
+
+
+
+
+
+Check if model median, credible intervals and NEC estimates are reasonable compared to the raw data
+```{r}
+plot(out.2018N.G.fert.UV.all, all_models = TRUE, add.NEC = TRUE)
+```
+
+Based on visual evaluation of the candidate models the following should be excluded:    
+    - NECsigmoidal
+    - NECHormesis
+    - NEC4param 
+    - NEC3param
+
+Remove models where chains did not converge or that do not make sense graphically
+```{r}
+out.2018N.G.fert.UV.mod <- modify_jagsMANEC(out.2018N.G.fert.UV.all, drop.models = c("ECxWeibull2", "ECxWeibull1", "ECx4param", "NECsigmoidal", "NECHormesis", "NEC4param", "NEC3param"))
+```
+
+
+```{r}
+plot(out.2018N.G.fert.UV.mod, add.NEC = TRUE, add.EC10 = TRUE)
+```
+
+
+
+Check for evidence of overdispersion
+```{r}
+out.2018N.G.fert.UV.mod$mod.stats
+```
+
+Overdispersion parameters < 1 for both candidate models.
+
+
+
+
+Fit a MANEC with over.disp=TRUE
+```{r}
+out.2018N.G.fert.UV.all.od <- fit.jagsMANEC(data = data.2018N.G.fert.UV, 
+                        x.var = "log.x", 
+                        y.var = "suc", 
+                        trials.var = "tot",
+                        model.set = "all",
+                        burnin = 20000,
+                        over.disp = TRUE)
+save(out.2018N.G.fert.UV.all.od, file = "2018.11_GfertUV_modfits3.RData")
+load("2018.11_GfertUV_modfits3.RData")
+beep("mario")
+```
+
+
+```{r}
+check.chains(out.2018N.G.fert.UV.all.od)
+```
+
+Evidence of poor chain mixing and/or autocorrelation observed for:
+    - ECxWeibull2 (beta, bot & EC50)
+    - ECxWeibull1 (top, beta & EC50)
+    - ECx4param (top, beta & EC50)
+    - NEC4param (top, beta & NEC)
+    - NEC3param (top, beta & NEC)
+    
+    
+Non-convergence observed for:
+    - NECsigmoidal
+
+
+
+```{r}
+plot(out.2018N.G.fert.UV.all.od, all_models = TRUE, add.NEC = TRUE)
+```
+
+Based on graphical evaluation of model fit all models except the following should be excluded:
+    - ECxWeibull1
+    - ECxLinear
+    - NEC3param
+
+
+
+```{r}
+out.2018N.G.fert.UV.mod.od <- modify_jagsMANEC(out.2018N.G.fert.UV.all.od, drop.models = c("NECsigmoidal", "NEC4param", "NEC3param", "NECHormesis", "ECxWeibull1", "ECxWeibull2", "ECx4param"))
+```
+
+```{r}
+plot(out.2018N.G.fert.UV.mod.od, add.NEC = TRUE)
+```
+
+
+```{r}
+plot(out.2018N.G.fert.UV.mod.od, add.NEC = TRUE, add.EC10 = TRUE)
+```
+
+Compare to MANEC fitted using the binomial distribution
+```{r}
+plot(out.2018N.G.fert.UV.mod, add.NEC = TRUE, add.EC10 = TRUE)
+```
+
+
+
+
+Rename model output for selected model
+```{r}
+out.2018N.G.fert.UV <- out.2018N.G.fert.UV.mod.od
+```
+
+
+
+
+
+Save the output for the selected model
+```{r}
+save(out.2018N.G.fert.UV, file = "2018.11_GfertUV_modfit.RData")
+load("2018.11_GfertUV_modfit.RData")
+```
+
+
+
+
+
+
+##### Extract results
+
+Extract EC10 and EC50 (with 95% credible intervals) from posterior and backtransform if required
+
+
+
+```{r}
+EC10.2018N.G.fert.UV <- extract_ECx(out.2018N.G.fert.UV, ECx.val = 10, type = "absolute")
+EC10.2018N.G.fert.UV <- 10^EC10.2018N.G.fert.UV
+EC10.2018N.G.fert.UV
+```
+
+
+```{r}
+EC50.2018N.G.fert.UV <- extract_ECx(out.2018N.G.fert.UV, ECx.val = 50, type = "absolute")
+EC50.2018N.G.fert.UV <- 10^EC50.2018N.G.fert.UV
+EC50.2018N.G.fert.UV
+```
+
+
+
+Extract complete posteriors for use in plotting and model comparison
+```{r}
+pred.2018N.G.fert.UV <- out.2018N.G.fert.UV$pred.vals
+str(pred.2018N.G.fert.UV)
+save(pred.2018N.G.fert.UV, file = "2018.11_GfertUV_predvals.RData")
+```
+
+
+
+
+#### PLot results
+
+```{r}
+library(ggplot2)
+library(scales)
+```
+
+
+
+##### Combined "all models subset" plot
+
+
+```{r}
+p0= ggplot()
+#p0= p0+ geom_point(data = data.2018N.G.fert.Dark.raw, aes(x = raw.x, y = prop, colour=factor(factor), alpha = 0.3), size = data.2018N.G.fert.Dark.raw$tot*0.2, position=position_jitter(width = .025, height=0.03))
+#p0= p0+ geom_point(data = data.2018N.G.fert.UV.raw, aes(x = raw.x, y = prop, colour=factor(factor), alpha = 0.3), size = data.2018N.G.fert.UV.raw$tot*0.2, position=position_jitter(width = .025, height=0.03))
+p0= p0+ scale_color_manual(values = c("UV" = "steelblue", "Dark" = "slategrey")) + theme_light()
+p0= p0+  geom_ribbon(aes(x=10^pred.2018N.G.fert.Dark$x, ymin=pred.2018N.G.fert.Dark$lw, ymax=pred.2018N.G.fert.Dark$up, fill="slategrey"),  alpha=0.3) #Seagreen HEX code: #2e8b57
+#p0= p0+  scale_fill_manual(values=c("seagreen", "steelblue"))
+p0= p0+  geom_ribbon(aes(x=10^pred.2018N.G.fert.UV$x, ymin=pred.2018N.G.fert.UV$lw, ymax=pred.2018N.G.fert.UV$up,fill="steelblue",  alpha=0.3))
+#p0= p0+  scale_fill_manual(values="steelblue")
+p0= p0+ geom_line(aes(x=10^pred.2018N.G.fert.Dark$x, y=pred.2018N.G.fert.Dark$y), color = 'grey30', size=0.5)
+p0= p0+ geom_line(aes(x=10^pred.2018N.G.fert.UV$x, y=pred.2018N.G.fert.UV$y), color = 'grey30', size=0.5)
+p0= p0+ geom_point(data = data.2018N.G.fert.Dark.raw, aes(x = raw.x, y = prop, colour=factor(factor), alpha = 0.3), size = data.2018N.G.fert.Dark.raw$tot*0.02, position=position_jitter(width = .025, height=0.02))
+p0= p0+ geom_point(data = data.2018N.G.fert.UV.raw, aes(x = raw.x, y = prop, colour=factor(factor), alpha = 0.3), size = data.2018N.G.fert.UV.raw$tot*0.02, position=position_jitter(width = .025, height=0.02))
+p0 = p0+ labs(x=expression(Concentration~(μg~TAH~"L"^{-1})),
+              y=expression(Fertilisation~rate~("%")))
+p0= p0+ scale_y_continuous( limits = c(-0.03, 1.22), breaks = c(0, 0.25, 0.5, 0.75, 1.0, 1.25), labels = c(0, 25, 50, 75, 100, 125)) 
+p0= p0+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.border = element_blank(), axis.line = element_line(colour = "grey80"))
+p0= p0+ scale_fill_manual(values = c("slategrey", "steelblue"))
+p0= p0+ theme(legend.position="none")
+# p0 = p0  + theme(legend.position = c(0.9, 0.9))
+p0= p0+ scale_x_continuous(limits = c(0.019, 1000), trans="log10", breaks = c(0.019, 1, 10, 100, 1000), labels = c(0, 1, 10, 100, 1000))
+#p0= p0+ facet_wrap(~factor, nrow = 1)
+p0
+```
+
+```{r}
+Nov2018.GfertModfitplot <- p0
+save(Nov2018.GfertModfitplot, file = "2018.11_Gfertmodfitplot.RData")
+```
+
+
+##### Combined "NEC subset" plot
+
+```{r}
+p0= ggplot()
+#p0= p0+ geom_point(data = data.2018N.G.fert.Dark.raw, aes(x = raw.x, y = prop, colour=factor(factor), alpha = 0.3), size = data.2018N.G.fert.Dark.raw$tot*0.2, position=position_jitter(width = .025, height=0.03))
+#p0= p0+ geom_point(data = data.2018N.G.fert.UV.raw, aes(x = raw.x, y = prop, colour=factor(factor), alpha = 0.3), size = data.2018N.G.fert.UV.raw$tot*0.2, position=position_jitter(width = .025, height=0.03))
+p0= p0+ scale_color_manual(values = c("UV" = "steelblue", "Dark" = "slategrey")) + theme_light()
+p0= p0+  geom_ribbon(aes(x=10^pred.2018N.G.fert.Dark.NEC$x, ymin=pred.2018N.G.fert.Dark.NEC$lw, ymax=pred.2018N.G.fert.Dark.NEC$up, fill="slategrey"),  alpha=0.3) #Seagreen HEX code: #2e8b57
+#p0= p0+  scale_fill_manual(values=c("seagreen", "steelblue"))
+#p0= p0+  geom_ribbon(aes(x=10^pred.2018N.G.fert.UV.NEC$x, ymin=pred.2018N.G.fert.UV.NEC$lw, ymax=pred.2018N.G.fert.UV.NEC$up,fill="steelblue",  alpha=0.3))
+#p0= p0+  scale_fill_manual(values="steelblue")
+p0= p0+ geom_line(aes(x=10^pred.2018N.G.fert.Dark.NEC$x, y=pred.2018N.G.fert.Dark.NEC$y), color = 'grey30', size=0.5)
+#p0= p0+ geom_line(aes(x=10^pred.2018N.G.fert.UV.NEC$x, y=pred.2018N.G.fert.UV.NEC$y), color = 'grey30', size=0.5)
+p0= p0+ geom_point(data = data.2018N.G.fert.Dark.raw, aes(x = raw.x, y = prop, colour=factor(factor), alpha = 0.3), size = data.2018N.G.fert.Dark.raw$tot*0.02, position=position_jitter(width = .025, height=0.02))
+p0= p0+ geom_point(data = data.2018N.G.fert.UV.raw, aes(x = raw.x, y = prop, colour=factor(factor), alpha = 0.3), size = data.2018N.G.fert.UV.raw$tot*0.02, position=position_jitter(width = .025, height=0.02))
+p0 = p0+ labs(x=expression(Concentration~(μg~TAH~"L"^{-1})),
+              y=expression(Fertilisation~rate~("%")))
+p0= p0+ scale_y_continuous( limits = c(-0.03, 1.26), breaks = c(0, 0.25, 0.5, 0.75, 1.0, 1.25), labels = c(0, 25, 50, 75, 100, 125)) 
+p0= p0+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.border = element_blank(), axis.line = element_line(colour = "grey80"))
+p0= p0+ scale_fill_manual(values = c("slategrey", "steelblue"))
+p0= p0+ theme(legend.position="none")
+# p0 = p0  + theme(legend.position = c(0.9, 0.9))
+p0= p0+ scale_x_continuous(limits = c(0.019, 1000), trans="log10", breaks = c(0.019, 1, 10, 100, 1000), labels = c(0, 1, 10, 100, 1000))
+#p0= p0+ facet_wrap(~factor, nrow = 1)
+p0
+```
+
+
+Rename and save plot
+```{r}
+Nov2018.GfertNECfitplot <- p0
+save(Nov2018.GfertNECfitplot, file = "2018.11_GfertNECfitplot.RData")
+```
+
+
+#### Compare +/-UV posteriors
+
+Ensure dependency packages are loaded
+```{r}
+library(dplyr)
+library(tidybayes)
+library(jagsNEC) #for manual function use
+library(R2jags) #for manual function use
+library(ggplot2)
+```
+
+
+##### NEC
+
+Perform comparison of posterior distributions for survival NEC
+```{r}
+comp.2018N.G.fert.NEC <- compare_posterior(out.2018N.G.fert.Dark, out.2018N.G.fert.UV, comparison = "NEC") #1st model=blue, 2nd model=orange; #place Dark model first and UV model second for colour matching in custom plots
+comp.2018N.G.fert.NEC
+```
+
+
+As a reliable NEC cannot be extracted from the +UV model output only the -UV posterior density is plotted
+
+```{r}
+comp.2018N.G.fert.NEC$df3.s <- filter(comp.2018N.G.fert.NEC$df3.s, curve=="blue")
+```
+
+
+
+For custom plotting of survival NEC comparison
+```{r}
+p1 = ggplot(comp.2018N.G.fert.NEC$df3.s, aes(x=PS))+geom_density(aes(group=curve, color=curve , fill=curve), alpha=0.4) #df3.s is an object returned by compare_posterior()
+p1 = p1 + stat_pointinterval(aes(y = 0.00, x = PS, group=curve),.width = c(.66, .95), size=0.5)+
+  theme_light()
+p1 = p1+scale_fill_manual( values = c("slategrey", "steelblue"))+
+  scale_color_manual( values = c("grey","grey", "steelblue1","steelblue", "grey","grey", "grey","grey"))+theme(legend.position="none")
+p1 = p1 + scale_y_continuous(name ="Posterior probability density", limits = c(0, 2)) 
+p1 = p1 + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.border = element_blank(), axis.line = element_line(colour = "grey80"))
+p1 = p1 + scale_x_continuous(limits = c(-0.8, 3.3), breaks = c(0, 1, 2, 3), labels = c(1, 10, 100, 1000)) #update breaks+labels to match the scale given by the automatic compare_posterior output
+p1 = p1 + labs(x=expression(NEC~(μg~TAH~"L"^{-1})))
+p1
+```
+
+Rename and save plot
+```{r}
+Nov2018.GfertNECcomp <- p1
+save(Nov2018.GfertNECcomp, file = "2018.11_GfertNECcomp.RData")
+```
+
+
+
+For custom plotting of NEC differences posterior density
+```{r}
+p2 = ggplot(comp.2018N.G.fert.NEC$df4.s, aes(x=comp.2018N.G.fert.NEC$df4.s$diff))+geom_density(aes(x=comp.2018N.G.fert.NEC$df4.s$diff, fill = 'grey'), alpha=0.4)+ #df4.s is an object returned by compare_posterior()
+  stat_pointinterval(aes(y = 0.00, x = comp.2018N.G.fert.NEC$df4.s$diff),.width = c(.66, .95))+
+   geom_vline(xintercept = 0, color = "red", lty = 2)+ theme_light()
+p2 = p2+scale_fill_manual( values = c("grey", "grey"))+
+  scale_color_manual( values = c("grey","grey", "steelblue1","steelblue4", "grey","grey", "grey","grey"))+theme(legend.position="none")
+p2 = p2 + scale_y_continuous(name ="Differences posterior density") 
+p2 = p2 + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.border = element_blank(), axis.line = element_line(colour = "grey80"))
+p2 = p2 + scale_x_continuous(name ="Standardized effect size") 
+p2
+#save(p2, file = "2017.12_LsurvNECdiff.RData")
+```
+
+
+##### EC50
+
+Comparisons of EC50 cannot be performed.
+
+
+Perform comparison of posterior distributions for survival EC50
+```{r}
+comp.2018N.G.fert.EC50 <- compare_posterior(out.2018N.G.fert.Dark, out.2018N.G.fert.UV, comparison="ECx", ECx.val = 50) #place Dark model first and UV model second for colour matching in custom plots
+comp.2018N.G.fert.EC50
+```
+
+
+
+### Create layouts
+
+```{r}
+#devtools::install_github("kassambara/ggpubr")
+library(ggpubr)
+```
+
+
+Create layout
+
+Load graphics
+```{r}
+load("2018.11_Gfertmodfitplot.RData") #Nov2018.GfertModfitplot
+
+load("2018.11_GfertNECfitplot.RData") #Nov2018.GfertNECfitplot
+load("2018.11_GfertNECcomp.RData") #Nov2018.GfertNECcomp
+```
+
+
+```{r}
+layout.E.surv <- ggarrange(Nov2018.GfertModfitplot, Nov2018.GfertNECfitplot, Nov2018.GfertNECcomp,
+          ncol = 2, nrow = 2,
+          widths = c(0.5, 0.5))
+layout.E.surv
+```
+
+
+
+
+
